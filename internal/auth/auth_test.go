@@ -365,3 +365,16 @@ func TestOIDCStateBindingAndIdentityIsolation(t *testing.T) {
 		t.Fatal("browser identity linked to app assertion by email")
 	}
 }
+
+func TestProviderTransportRejectsUnsafeEndpoints(t *testing.T) {
+	transport := providerTransport{base: http.DefaultTransport}
+	for _, endpoint := range []string{"http://auth.example/jwks", "http://127.0.0.1/jwks", "https://user:secret@auth.example/jwks", "https://auth.example/jwks?credential=private"} {
+		r, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = transport.RoundTrip(r); err == nil {
+			t.Fatal("unsafe identity endpoint accepted")
+		}
+	}
+}

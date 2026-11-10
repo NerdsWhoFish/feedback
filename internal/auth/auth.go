@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/oauth2"
 )
 
@@ -33,17 +35,22 @@ type Auth struct {
 	loginLimiter *Limiter
 }
 
-type providerTransport struct{ local bool }
+type providerTransport struct {
+	local bool
+	base  http.RoundTripper
+}
 
 func (t providerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !config.ValidEndpoint(r.URL.Scheme+"://"+r.URL.Host+r.URL.EscapedPath(), t.local) {
+	if !config.ValidEndpoint(r.URL.String(), t.local) {
 		return nil, errors.New("insecure OIDC endpoint rejected")
 	}
-	return http.DefaultTransport.RoundTrip(r)
+	return t.base.RoundTrip(r)
 }
 
 func New(ctx context.Context, db *pgxpool.Pool, c config.Config) (*Auth, error) {
-	a := &Auth{db: db, config: c, client: &http.Client{Transport: providerTransport{local: c.Environment == "local"}, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, limiter: NewLimiter(c.KeyRPM), loginLimiter: NewLimiter(20)}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	a := &Auth{db: db, config: c, client: &http.Client{Transport: providerTransport{local: c.Environment == "local", base: transport}, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, limiter: NewLimiter(c.KeyRPM), loginLimiter: NewLimiter(20)}
 	if c.OIDCIssuer == "" {
 		return a, nil
 	}
@@ -295,8 +302,14 @@ func (a *Auth) Cleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_, _ = a.db.Exec(ctx, `DELETE FROM sessions WHERE expires_at<now()`)
-			_, _ = a.db.Exec(ctx, `DELETE FROM oidc_states WHERE expires_at<now()`)
+			jobCtx, span := otel.Tracer("feedback/auth").Start(ctx, "auth.cleanup")
+			_, sessionErr := a.db.Exec(jobCtx, `DELETE FROM sessions WHERE expires_at<now()`)
+			_, stateErr := a.db.Exec(jobCtx, `DELETE FROM oidc_states WHERE expires_at<now()`)
+			if (sessionErr != nil || stateErr != nil) && ctx.Err() == nil {
+				span.SetStatus(codes.Error, "cleanup failed")
+				slog.ErrorContext(jobCtx, "authentication cleanup failed")
+			}
+			span.End()
 		}
 	}
 }

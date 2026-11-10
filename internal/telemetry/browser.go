@@ -84,17 +84,17 @@ func BrowserRelay(origin, endpoint, environment, version string, logger *slog.Lo
 			return
 		}
 		if r.Header.Get("Origin") != origin {
-			http.Error(w, "Forbidden", 403)
+			relayError(w, http.StatusForbidden, "forbidden", "Forbidden")
 			return
 		}
 		if !limiter.Allow("relay") {
-			http.Error(w, "Rate limit exceeded", 429)
+			relayError(w, http.StatusTooManyRequests, "rate_limited", "Rate limit exceeded")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		var raw map[string]json.RawMessage
 		if json.NewDecoder(r.Body).Decode(&raw) != nil {
-			http.Error(w, "Invalid telemetry", 400)
+			relayError(w, http.StatusBadRequest, "invalid_input", "Invalid telemetry")
 			return
 		}
 		envelope := safeEnvelope(raw, environment, version)
@@ -110,7 +110,7 @@ func BrowserRelay(origin, endpoint, environment, version string, logger *slog.Lo
 		body, _ := json.Marshal(envelope)
 		request, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 		if err != nil {
-			http.Error(w, "Telemetry unavailable", 503)
+			relayError(w, http.StatusServiceUnavailable, "unavailable", "Telemetry unavailable")
 			return
 		}
 		var id [16]byte
@@ -121,17 +121,24 @@ func BrowserRelay(origin, endpoint, environment, version string, logger *slog.Lo
 		if err != nil {
 			span.SetStatus(codes.Error, "relay failed")
 			logger.ErrorContext(ctx, "browser telemetry delivery failed")
-			http.Error(w, "Telemetry unavailable", 503)
+			relayError(w, http.StatusServiceUnavailable, "unavailable", "Telemetry unavailable")
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			span.SetStatus(codes.Error, "relay rejected")
 			logger.ErrorContext(ctx, "browser telemetry delivery rejected", "status", resp.StatusCode)
-			http.Error(w, "Telemetry unavailable", 503)
+			relayError(w, http.StatusServiceUnavailable, "unavailable", "Telemetry unavailable")
 			return
 		}
 		w.WriteHeader(202)
 	})
+}
+
+func relayError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
