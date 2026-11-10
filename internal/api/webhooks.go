@@ -351,6 +351,7 @@ func (s *Server) RunWebhooks(ctx context.Context) {
 				parent := propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": d.TraceParent})
 				spanCtx, span := otel.Tracer("feedback/webhooks").Start(parent, "webhook.delivery")
 				status, outcome := s.deliver(spanCtx, client, d)
+				s.metrics.WebhookAttempt(outcome)
 				span.SetAttributes(attribute.String("delivery.outcome", outcome), attribute.Int("http.response.status_code", status))
 				if outcome != "delivered" {
 					span.SetStatus(codes.Error, "delivery_failed")

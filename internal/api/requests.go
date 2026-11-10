@@ -95,7 +95,11 @@ func (s *Server) listRequests(w http.ResponseWriter, r *http.Request) error {
 	if p.KeyType == "app" && !validText(ext, 255) {
 		return invalid("App reads require external_id.")
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT `+requestFields+` FROM requests r WHERE r.project_id=$1 AND ($2='' OR r.status=$2) AND ($3<>'app' OR EXISTS(SELECT 1 FROM identities i WHERE i.user_id=r.author_id AND i.issuer=$4 AND i.subject=$5)) ORDER BY r.created_at DESC,r.id LIMIT $6 OFFSET $7`, id, status, p.KeyType, "app:"+p.AppName, ext, limit, offset)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(query) > 200 {
+		return invalid("Search is limited to 200 characters.")
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT `+requestFields+` FROM requests r WHERE r.project_id=$1 AND ($2='' OR r.status=$2) AND ($3<>'app' OR EXISTS(SELECT 1 FROM identities i WHERE i.user_id=r.author_id AND i.issuer=$4 AND i.subject=$5)) AND ($8='' OR strpos(lower(r.title),lower($8))>0 OR strpos(lower(r.description),lower($8))>0) ORDER BY r.created_at DESC,r.id LIMIT $6 OFFSET $7`, id, status, p.KeyType, "app:"+p.AppName, ext, limit, offset, query)
 	if err != nil {
 		return err
 	}
@@ -198,6 +202,9 @@ func (s *Server) createRequest(w http.ResponseWriter, r *http.Request) error {
 	if err = s.enqueue(r.Context(), tx, id, "request_created", map[string]any{"request_id": requestID, "status": "open"}); err != nil {
 		return err
 	}
+	if err = s.enqueueEmail(r.Context(), tx, requestID, "request_created"); err != nil {
+		return err
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		return err
 	}
@@ -265,6 +272,9 @@ func (s *Server) addComment(w http.ResponseWriter, r *http.Request) error {
 		if err = s.enqueue(r.Context(), tx, v.ProjectID, "comment_created", map[string]any{"request_id": v.ID, "comment_id": items[0]["id"]}); err != nil {
 			return err
 		}
+		if err = s.enqueueEmail(r.Context(), tx, v.ID, "comment_created"); err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		return err
@@ -328,6 +338,15 @@ func (s *Server) changeStatus(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err = s.enqueue(r.Context(), tx, v.ProjectID, "status_changed", map[string]any{"request_id": v.ID, "from_status": from, "status": in.Status}); err != nil {
+		return err
+	}
+	if in.Status == "shipped" {
+		// Re-shipping must not overwrite an administrator's draft or published copy.
+		if _, err = tx.Exec(r.Context(), `WITH draft AS (INSERT INTO changelog(project_id,title,body,automatic_request_id) SELECT project_id,title,'Shipped: ' || title,id FROM requests WHERE id=$1 ON CONFLICT(automatic_request_id) DO NOTHING RETURNING id) INSERT INTO changelog_requests(changelog_id,request_id) SELECT id,$1 FROM draft`, v.ID); err != nil {
+			return err
+		}
+	}
+	if err = s.enqueueEmail(r.Context(), tx, v.ID, "status_changed"); err != nil {
 		return err
 	}
 	if err = tx.Commit(r.Context()); err != nil {

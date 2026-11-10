@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useAction, usePageTail, useResource } from "./api";
+import { RequestSubscription } from "./Notifications";
 import {
   DateLabel,
   Empty,
@@ -282,6 +283,7 @@ export function RequestDetail({
               </div>
             </div>
             <p className="prose request-description">{request.description}</p>
+            <RequestSubscription key={`${id}:${request.votes}`} id={id} />
             {publicURL && (
               <div className="share-link">
                 <div>

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -20,6 +21,7 @@ type Config struct {
 	KeyRPM                                                      int
 	WebhookKey                                                  []byte
 	FaroURL                                                     string
+	MetricsAddress, ResendAPIKey, EmailFrom                     string
 }
 
 func Load() (Config, error) {
@@ -27,6 +29,19 @@ func Load() (Config, error) {
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURL: os.Getenv("OIDC_REDIRECT_URL"),
 		OIDCAuthURL: os.Getenv("OIDC_AUTH_URL"), OIDCTokenURL: os.Getenv("OIDC_TOKEN_URL"), OIDCUserInfoURL: os.Getenv("OIDC_USERINFO_URL"), OIDCJWKSURL: os.Getenv("OIDC_JWKS_URL"),
 		AdminEmails: map[string]bool{}, SessionTTL: 12 * time.Hour, KeyRPM: 120, FaroURL: os.Getenv("FARO_COLLECTOR_URL")}
+	c.MetricsAddress = os.Getenv("METRICS_ADDR")
+	c.ResendAPIKey = os.Getenv("RESEND_API_KEY")
+	c.EmailFrom = os.Getenv("EMAIL_FROM")
+	if c.MetricsAddress != "" {
+		_, port, err := net.SplitHostPort(c.MetricsAddress)
+		n, parseErr := strconv.Atoi(port)
+		if err != nil || parseErr != nil || n < 1 || n > 65535 {
+			return c, errors.New("METRICS_ADDR must be a host:port listener address")
+		}
+		if c.MetricsAddress == c.Address {
+			return c, errors.New("METRICS_ADDR must be separate from HTTP_ADDR")
+		}
+	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
 	}

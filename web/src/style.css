@@ -948,6 +948,17 @@ legend {
   border-bottom: 1px solid var(--line);
   gap: 2rem;
 }
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.subscription {
+  margin: 1.5rem 0;
+}
+.subscription .hint {
+  margin-top: 0.75rem;
+}
 .changelog-entry > div {
   display: flex;
   flex-direction: column;
@@ -1168,9 +1179,10 @@ legend {
   }
   .sidebar nav {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
   .nav-link {
-    flex: 1;
+    flex: 1 1 calc(50% - 0.5rem);
   }
   .list-toolbar {
     align-items: flex-start;

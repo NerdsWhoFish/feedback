@@ -80,6 +80,7 @@ export interface ChangelogEntry {
   title: string;
   body: string;
   created_at: string;
+  published_at: string | null;
   request_ids: string[];
 }
 export interface Membership {

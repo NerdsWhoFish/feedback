@@ -35,7 +35,7 @@ func Handler() http.Handler {
 		}
 		index, err := fs.ReadFile(root, "index.html")
 		if err != nil {
-			http.Error(w, "Build the portal with pnpm --dir web build", 503)
+			http.Error(w, "Build the portal with pnpm --dir web build", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

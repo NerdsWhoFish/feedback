@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/NerdsWhoFish/feedback/internal/auth"
+	"github.com/NerdsWhoFish/feedback/internal/telemetry"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +28,8 @@ type Server struct {
 	db         *pgxpool.Pool
 	log        *slog.Logger
 	webhookKey []byte
+	email      *emailConfig
+	metrics    *telemetry.Metrics
 }
 
 func New(db *pgxpool.Pool, logger *slog.Logger) *Server { return &Server{db: db, log: logger} }
@@ -58,9 +61,10 @@ func (s *Server) wrap(h handler) http.Handler {
 			case errors.Is(err, pgx.ErrNoRows):
 				e = missing
 			case errors.As(err, &pe):
-				if pe.Code == "23505" {
+				switch pe.Code {
+				case "23505":
 					e = apiError{409, "conflict", "This resource already exists."}
-				} else if pe.Code == "23503" || pe.Code == "23514" {
+				case "23503", "23514":
 					e = invalid("A referenced resource or field is invalid.")
 				}
 			}
@@ -80,6 +84,9 @@ func (s *Server) Register(mux *http.ServeMux, require func(http.Handler) http.Ha
 		"GET /api/v1/requests/{id}/comments": s.listComments, "GET /api/v1/requests/{id}/history": s.listHistory,
 		"PUT /api/v1/requests/{id}/vote": s.vote, "DELETE /api/v1/requests/{id}/vote": s.vote,
 		"GET /api/v1/projects/{project}/changelog": s.listChangelog, "POST /api/v1/projects/{project}/changelog": s.addChangelog,
+		"PATCH /api/v1/projects/{project}/changelog/{id}": s.updateChangelog,
+		"GET /api/v1/me/notifications":                    s.emailPreferences, "PUT /api/v1/me/notifications": s.emailPreferences,
+		"GET /api/v1/requests/{id}/subscription": s.subscription, "PUT /api/v1/requests/{id}/subscription": s.subscription, "DELETE /api/v1/requests/{id}/subscription": s.subscription,
 		"GET /api/v1/projects/{project}/memberships": s.listMemberships, "POST /api/v1/projects/{project}/memberships": s.addMembership, "DELETE /api/v1/projects/{project}/memberships/{email}": s.deleteMembership,
 		"GET /api/v1/keys": s.listKeys, "POST /api/v1/keys": s.createKey, "DELETE /api/v1/keys/{id}": s.revokeKey,
 		"GET /api/v1/projects/{project}/webhooks": s.listWebhooks, "POST /api/v1/projects/{project}/webhooks": s.createWebhook, "DELETE /api/v1/projects/{project}/webhooks/{id}": s.deleteWebhook, "GET /api/v1/projects/{project}/deliveries": s.listDeliveries,
@@ -87,6 +94,9 @@ func (s *Server) Register(mux *http.ServeMux, require func(http.Handler) http.Ha
 	for pattern, h := range routes {
 		mux.Handle(pattern, require(s.wrap(h)))
 	}
+	mux.Handle("/mcp", require(s.MCP()))
+	mux.Handle("GET /api/v1/email/unsubscribe/{token}", s.wrap(s.emailUnsubscribe))
+	mux.Handle("POST /api/v1/email/unsubscribe/{token}", s.wrap(s.emailUnsubscribe))
 	mux.Handle("GET /api/v1/public/requests/{token}", s.wrap(s.publicRequest))
 	mux.Handle("GET /api/v1/public/requests/{token}/comments", s.wrap(s.publicComments))
 	mux.Handle("GET /api/v1/public/requests/{token}/history", s.wrap(s.publicHistory))

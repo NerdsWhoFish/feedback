@@ -126,7 +126,7 @@ func parseHeaders(raw string) (map[string]string, error) {
 			return nil, errors.New("invalid OTLP header configuration")
 		}
 		for _, c := range key {
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
 				return nil, errors.New("invalid OTLP header configuration")
 			}
 		}
@@ -141,6 +141,10 @@ type response struct {
 }
 
 func (w *response) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if w.status == 0 {
 		w.status = status
 		w.ResponseWriter.WriteHeader(status)
@@ -154,7 +158,20 @@ func (w *response) Write(b []byte) (int, error) {
 }
 func (w *response) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+func (w *response) FlushError() error {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *response) Flush() { _ = w.FlushError() }
+
 func HTTP(logger *slog.Logger, next http.Handler) http.Handler {
+	return HTTPWithMetrics(logger, next, nil)
+}
+
+func HTTPWithMetrics(logger *slog.Logger, next http.Handler, metrics *Metrics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
@@ -177,6 +194,7 @@ func HTTP(logger *slog.Logger, next http.Handler) http.Handler {
 			if status == 0 {
 				status = 200
 			}
+			metrics.observeHTTP(request.Method, route, status, time.Since(start))
 			span.SetName(route)
 			span.SetAttributes(attribute.String("http.route", route), attribute.Int("http.response.status_code", status))
 			if status >= 500 {

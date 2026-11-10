@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -87,6 +88,11 @@ func run() error {
 		return err
 	}
 	application := api.New(db, logger)
+	if err = application.ConfigureEmail(c.ResendAPIKey, c.EmailFrom, c.BaseURL, c.AdminEmails); err != nil {
+		return err
+	}
+	metrics := telemetry.NewMetrics(application.RequestCounts)
+	application.SetMetrics(metrics)
 	if len(c.WebhookKey) > 0 {
 		if err = application.SetWebhookEncryptionKey(c.WebhookKey); err != nil {
 			return errors.New("invalid webhook encryption configuration")
@@ -118,14 +124,31 @@ func run() error {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "API route not found"}})
 	})
 	mux.Handle("/", web.Handler())
-	server := &http.Server{Addr: c.Address, Handler: headers(telemetry.HTTP(logger, mux), c.CookieSecure), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{Addr: c.Address, Handler: headers(telemetry.HTTPWithMetrics(logger, mux, metrics), c.CookieSecure), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	var metricsServer *http.Server
+	var metricsListener net.Listener
+	if c.MetricsAddress != "" {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", metrics.Handler())
+		metricsServer = &http.Server{Handler: metricsMux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10}
+		metricsListener, err = net.Listen("tcp", c.MetricsAddress)
+		if err != nil {
+			return errors.New("metrics listener failed")
+		}
+		defer func() { _ = metricsServer.Close() }()
+	}
 	var workers sync.WaitGroup
-	workers.Add(2)
+	workers.Add(3)
 	go func() { defer workers.Done(); authentication.Cleanup(ctx) }()
 	go func() { defer workers.Done(); application.RunWebhooks(ctx) }()
+	go func() { defer workers.Done(); application.RunEmail(ctx) }()
 	defer func() { stop(); workers.Wait() }()
-	done := make(chan error, 1)
+	done := make(chan error, 2)
 	go func() { done <- server.ListenAndServe() }()
+	if metricsServer != nil {
+		go func() { done <- metricsServer.Serve(metricsListener) }()
+	}
+	defer func() { _ = server.Close() }()
 	logger.Info("service started", "version", version)
 	select {
 	case <-ctx.Done():
@@ -138,6 +161,9 @@ func run() error {
 	defer cancelShutdown()
 	if server.Shutdown(shutdownCtx) != nil {
 		return errors.New("HTTP shutdown failed")
+	}
+	if metricsServer != nil && metricsServer.Shutdown(shutdownCtx) != nil {
+		return errors.New("metrics shutdown failed")
 	}
 	return nil
 }

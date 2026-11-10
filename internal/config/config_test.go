@@ -37,3 +37,23 @@ func TestEndpointValidation(t *testing.T) {
 		t.Fatal("local test provider rejected")
 	}
 }
+
+func TestMetricsConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("BASE_URL", "http://localhost:8080")
+	t.Setenv("ENVIRONMENT", "local")
+	t.Setenv("HTTP_ADDR", ":8080")
+	for _, address := range []string{"missing-port", "127.0.0.1:0", ":65536", ":8080"} {
+		t.Setenv("METRICS_ADDR", address)
+		if _, err := Load(); err == nil {
+			t.Fatalf("accepted metrics address %q", address)
+		}
+	}
+	for _, address := range []string{"", "127.0.0.1:9090", "[::1]:9090"} {
+		t.Setenv("METRICS_ADDR", address)
+		c, err := Load()
+		if err != nil || c.MetricsAddress != address {
+			t.Fatalf("address %q: %v", address, err)
+		}
+	}
+}

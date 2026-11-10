@@ -14,7 +14,8 @@ info:
     requests. App reads require external_id and never link users by email.
     Assistant keys cannot approve new work or manage administration resources.
     Lists use limit/offset pagination. Empty lists return items: [].
-    All JSON request objects reject unknown fields and have a 64 KiB body limit.
+    REST JSON request objects reject unknown fields and have a 64 KiB body limit.
+    MCP uses a separate 128 KiB JSON-RPC body limit and assistant bearer keys only.
 servers:
   - url: https://feedback.nerdswhofish.com
   - url: http://localhost:8080
@@ -37,6 +38,155 @@ tags:
   - name: Operations
     description: Health, readiness and privacy-filtered telemetry.
 paths:
+  /mcp:
+    post:
+      operationId: mcpRequest
+      tags: [Requests]
+      summary: Streamable HTTP MCP endpoint for assistant keys
+      security: [{apiKey: []}]
+      description: |
+        Stateless JSON-RPC MCP using the official Go SDK. Requires an assistant
+        bearer key on every request; browser sessions and app keys are rejected.
+        Supports initialize, tools/list and tools/call with list_requests,
+        get_request, list_comments, list_history, add_comment, move_status and
+        add_changelog. Tool schemas are available through tools/list. The same
+        REST handlers enforce project access, input validation and transitions.
+        Accept must include application/json and text/event-stream. Subsequent
+        requests carry MCP-Protocol-Version. No persistent sessions or GET stream.
+        Maximum request body 128 KiB. Clients must use HTTPS in production.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200':
+          description: MCP JSON-RPC result or protocol error; tool failures use isError.
+          content:
+            application/json:
+              schema: {type: object}
+        '202': {description: Notification accepted.}
+        default: {$ref: '#/components/responses/Error'}
+  /metrics:
+    servers:
+      - url: http://127.0.0.1:9090
+    get:
+      operationId: metrics
+      tags: [Operations]
+      summary: Prometheus metrics on the optional private listener only
+      security: []
+      description: Disabled unless METRICS_ADDR is set. Never registered on HTTP_ADDR. Restrict this separate listener to loopback or a private monitoring network.
+      responses:
+        '200':
+          description: Bounded HTTP request counters/durations, webhook attempt outcomes and request counts by status. Collection-success gauge is zero on database failure.
+          content:
+            text/plain:
+              schema: {type: string}
+        '503': {description: Scrape concurrency or timeout limit reached.}
+  /api/v1/me/notifications:
+    get:
+      operationId: getEmailPreferences
+      tags: [Authentication]
+      summary: Read email preference and delivery availability
+      security: [{session: []}]
+      responses:
+        '200':
+          description: Current email preference.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EmailPreferences'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      operationId: setEmailPreferences
+      tags: [Authentication]
+      summary: Opt in or out of all Feedback notification emails
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '200':
+          description: Preference applies across identities sharing the recipient email.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EmailPreferences'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}/subscription:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getSubscription
+      tags: [Requests]
+      summary: Read whether the browser user follows this request
+      description: Authors and voters follow by default unless explicitly unfollowed. Global email opt-out still applies.
+      security: [{session: []}]
+      responses:
+        '200': {$ref: '#/components/responses/Subscription'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      operationId: subscribe
+      tags: [Requests]
+      summary: Follow a request in an accessible project
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '200': {$ref: '#/components/responses/Subscription'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: unsubscribeRequest
+      tags: [Requests]
+      summary: Unfollow a request, overriding author and vote defaults
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '200': {$ref: '#/components/responses/Subscription'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/email/unsubscribe/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{64}$'}
+    get:
+      operationId: emailUnsubscribeForm
+      tags: [Public]
+      summary: Show the unsubscribe confirmation form
+      description: Does not change preferences, so email link scanners cannot unsubscribe recipients.
+      security: []
+      responses:
+        '200':
+          description: Confirmation form without recipient identity.
+          content:
+            text/html:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: emailUnsubscribe
+      tags: [Public]
+      summary: Unsubscribe using an unguessable per-user capability
+      description: Accepts the confirmation form or List-Unsubscribe-Post one-click request. No login required. Suppresses queued delivery too.
+      security: []
+      responses:
+        '200':
+          description: Unsubscribed confirmation, idempotent.
+          content:
+            text/html:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Error'}
   /auth/login:
     get:
       operationId: login
@@ -178,6 +328,10 @@ paths:
         - name: status
           in: query
           schema: {$ref: '#/components/schemas/Status'}
+        - name: q
+          in: query
+          description: Case-insensitive literal substring search in title and description.
+          schema: {type: string, maxLength: 200}
       responses:
         '200':
           description: Requests ordered newest first, with UUID as the stable tie-breaker.
@@ -387,7 +541,7 @@ paths:
       operationId: listChangelog
       tags: [Changelog]
       summary: List changelog entries for project members and assistants
-      description: App keys are not permitted.
+      description: Members see published entries only. Admins and scoped assistants also see drafts. App keys are not permitted.
       parameters:
         - {$ref: '#/components/parameters/Limit'}
         - {$ref: '#/components/parameters/Offset'}
@@ -409,7 +563,7 @@ paths:
       operationId: addChangelog
       tags: [Changelog]
       summary: Add a changelog entry as a browser admin or scoped assistant
-      description: Every linked request must be shipped and belong to this project.
+      description: Defaults to a draft. Only browser admins may set published=true. Every linked request must be shipped and belong to this project. Moving a request to shipped automatically creates one linked draft without overwriting an existing automatic entry.
       parameters:
         - {$ref: '#/components/parameters/CSRF'}
         - {$ref: '#/components/parameters/Origin'}
@@ -421,6 +575,36 @@ paths:
       responses:
         '201':
           description: Created changelog entry.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Changelog'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/changelog/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+      - {$ref: '#/components/parameters/ID'}
+    patch:
+      operationId: updateChangelog
+      tags: [Changelog]
+      summary: Edit, publish or unpublish an entry as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                title: {type: string, minLength: 1, maxLength: 200}
+                body: {type: string, minLength: 1, maxLength: 20000}
+                published: {type: boolean}
+      responses:
+        '200':
+          description: Updated entry. Omitted fields remain unchanged; request links are immutable.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Changelog'}
@@ -900,6 +1084,15 @@ components:
       description: Required on cookie-authenticated writes and must equal BASE_URL. Unused for bearer auth.
       schema: {type: string, format: uri}
   responses:
+    Subscription:
+      description: Effective request follow preference.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [subscribed]
+            properties:
+              subscribed: {type: boolean}
     Error:
       description: |
         JSON error. 400 invalid input or login, 401 missing/invalid authentication,
@@ -923,6 +1116,12 @@ components:
             properties:
               votes: {type: integer, minimum: 0}
   schemas:
+    EmailPreferences:
+      type: object
+      required: [enabled, available]
+      properties:
+        enabled: {type: boolean}
+        available: {type: boolean, description: Whether the server has Resend configured.}
     Error:
       type: object
       required: [error]
@@ -1031,18 +1230,20 @@ components:
       properties:
         title: {type: string, minLength: 1, maxLength: 200}
         body: {type: string, minLength: 1, maxLength: 20000}
+        published: {type: boolean, default: false, description: Only a browser admin may publish.}
         request_ids:
           type: array
           maxItems: 100
           items: {type: string, format: uuid}
     Changelog:
       type: object
-      required: [id, title, body, created_at, request_ids]
+      required: [id, title, body, created_at, published_at, request_ids]
       properties:
         id: {type: string, format: uuid}
         title: {type: string}
         body: {type: string}
         created_at: {type: string, format: date-time}
+        published_at: {type: [string, 'null'], format: date-time}
         request_ids:
           type: array
           items: {type: string, format: uuid}

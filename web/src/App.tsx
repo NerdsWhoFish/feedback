@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { Admin } from "./Admin";
 import { Changelog } from "./Changelog";
+import { NotificationPreferences } from "./Notifications";
 import { Requests, RequestDetail } from "./Requests";
 import { Brand, DateLabel, Empty, Loading, Notice, StatusBadge } from "./ui";
 import type { Page, Project, PublicRequest, User } from "./types";
@@ -207,6 +208,14 @@ function Workspace({ user }: { user: User }) {
               <span aria-hidden="true">⚙</span> Administration
             </button>
           )}
+          <button
+            className={
+              nav.view === "notifications" ? "nav-link active" : "nav-link"
+            }
+            onClick={() => nav.navigate(selected?.id ?? "", "notifications")}
+          >
+            <span aria-hidden="true">✉</span> Email preferences
+          </button>
         </nav>
         <div className="sidebar-note">
           <span className="eyebrow">A WORK IN PROGRESS</span>
@@ -215,7 +224,9 @@ function Workspace({ user }: { user: User }) {
       </aside>
       <div className="content">
         <Notice error={projects.error} />
-        {nav.view === "admin" && admin ? (
+        {nav.view === "notifications" ? (
+          <NotificationPreferences />
+        ) : nav.view === "admin" && admin ? (
           <Admin
             project={selected}
             projects={projects.data?.items ?? []}
