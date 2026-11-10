@@ -1,0 +1,40 @@
+version: 2
+project_name: feedback
+
+before:
+  hooks:
+    - pnpm --dir web install --frozen-lockfile
+    - pnpm --dir web build
+
+builds:
+  - id: feedback
+    main: ./cmd/feedback
+    binary: feedback
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+
+archives:
+  - formats: [tar.gz]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+# CI passes this exact version to the Dockerfile's artifact verification.
+snapshot:
+  version_template: "0.0.0-SNAPSHOT-{{ .FullCommit }}"
+
+release:
+  github:
+    owner: NerdsWhoFish
+    name: feedback
+  prerelease: auto
+
+changelog:
+  sort: asc

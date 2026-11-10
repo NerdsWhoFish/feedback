@@ -1,10 +1,5 @@
-.git
-.github
-.env
-.env.*
-.local
-bin
-web/node_modules
-web/dist
-coverage.out
-*.log
+**
+!Dockerfile
+!dist/
+!dist/feedback_linux_*/
+!dist/feedback_linux_*/feedback

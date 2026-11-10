@@ -1,27 +1,14 @@
 # syntax=docker/dockerfile:1
-FROM --platform=$BUILDPLATFORM node:26-bookworm-slim AS frontend
-WORKDIR /src/web
-RUN npm install --global pnpm@10.28.2
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-COPY web/ ./
-RUN pnpm build
-
-FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS backend
-WORKDIR /src
-ENV CGO_ENABLED=0 GOWORK=off
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-COPY --from=frontend /src/web/dist ./web/dist
-ARG TARGETOS
-ARG TARGETARCH
-ARG VERSION=dev
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/feedback ./cmd/feedback
-
 FROM gcr.io/distroless/static-debian13:nonroot
+ARG TARGETARCH
+ARG VERSION
+ARG COMMIT
 WORKDIR /
-COPY --from=backend /out/feedback /feedback
+COPY dist/feedback_linux_${TARGETARCH}*/feedback /feedback
+# Fail if an image would ship a snapshot or a different commit under a release tag.
+RUN ["/feedback", "verify-build"]
+LABEL org.opencontainers.image.source="https://github.com/NerdsWhoFish/feedback" \
+      org.opencontainers.image.licenses="Apache-2.0"
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/feedback"]

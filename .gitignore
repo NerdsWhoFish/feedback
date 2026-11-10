@@ -5,6 +5,7 @@ web/node_modules/
 web/dist/*
 !web/dist/.gitkeep
 bin/
+dist/
 .local/
 coverage.out
 *.log

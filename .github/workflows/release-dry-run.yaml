@@ -1,0 +1,37 @@
+name: Release dry run
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.27.3"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "26"
+      - run: npm install --global pnpm@10.28.2
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        with:
+          platforms: arm64
+      - uses: NerdsWhoFish/quill@v1
+        with:
+          dry-run: "true"
+          publish: goreleaser,docker
+          goreleaser-version: v2.19.0
+          docker-login: "false"
+          docker-cache: "false"
+          docker-images: ghcr.io/nerdswhofish/feedback
+          docker-platforms: linux/amd64,linux/arm64
+          # Quill's planned release version differs from its snapshot build.
+          docker-build-args: VERSION=0.0.0-SNAPSHOT-${{ github.sha }}

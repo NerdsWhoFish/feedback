@@ -14,7 +14,7 @@ The API uses plain JSON and errors shaped as `{"error":{"code":"forbidden","mess
 
 ## Run locally
 
-Install Go 1.26 or newer, Node 22.12 or newer, pnpm 10.28.2 and Docker Compose. The Dockerfile uses Go 1.27 and Node 26. PostgreSQL 17 is used by Compose and CI.
+Install Go 1.26 or newer, Node 26, pnpm 10.28.2 and Docker Compose. PostgreSQL 17 is used by Compose and CI. Release builds also need GoReleaser 2.19.0. The Dockerfile packages a prebuilt binary; all Go and frontend compilation runs on the host or CI runner.
 
 ```sh
 docker compose up -d --wait postgres
@@ -46,7 +46,6 @@ pnpm --dir web lint
 pnpm --dir web typecheck
 pnpm --dir web build
 go vet ./...
-docker build -t feedback:local .
 ```
 
 Tests create isolated schemas in the supplied database. Never point the test configuration at production. Without `TEST_DATABASE_URL`, database integration tests are skipped; CI always supplies PostgreSQL. `make build` installs the locked frontend dependencies, builds the SPA and embeds it in `bin/feedback`.
@@ -93,7 +92,7 @@ Set the corresponding application `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`. Fee
 
 Keep the client ID and provider usernames stable: Tinyauth derives subjects from them. Tinyauth v5.2 emits `email_verified` for nonempty email claims, so trust depends on the provider's upstream identity configuration, not that claim alone. The [v5.2 implementation](https://github.com/tinyauthapp/tinyauth/blob/v5.2.0/internal/service/oidc_service.go) defines those behaviors.
 
-The existing provider catalog describes a Google domain allowlist that excludes ordinary Gmail accounts. Before inviting client Gmail addresses, deliberately update the provider allowlist in its own configuration. Membership in Feedback does not bypass Tinyauth's login policy. Keep administrator access limited to exact `ADMIN_EMAILS`; do not turn a provider domain into an automatic admin grant.
+Check the provider's login policy before inviting members. Membership in Feedback does not bypass Tinyauth's allowlist. Keep administrator access limited to exact `ADMIN_EMAILS`; do not turn a provider domain into an automatic admin grant.
 
 Feedback sets its own host-only, HttpOnly, Secure, SameSite=Lax cookie named `__Host-feedback`. Local HTTP uses `feedback_local`. Cookie-authenticated writes require both an exact public `Origin` and the `X-CSRF-Token` returned by `GET /api/v1/me`. Session tokens are stored as hashes; logout revokes the server session. `Remote-*` forward-auth headers are ignored.
 
@@ -174,12 +173,38 @@ The transactional event seam can support email later. Email delivery, an MCP end
 
 `GET /healthz` checks process health; `GET /readyz` checks database readiness. Structured logs and distributed traces use bounded operation names and trace/span correlation. The frontend reuses the shared privacy-filtered Faro SDK and sends telemetry to a server relay. Do not send tokens, emails, names, request contents, raw URLs or query strings into telemetry.
 
-The [deployment example](deploy/README.md) covers secret references, probes, security context, backup requirements and rollout checks. HTTPS ingress and Flux changes are separate work in the cluster repository. No GitHub repository, image publication or deployment has been performed by this local build.
+The [deployment example](deploy/README.md) covers secret references, probes, security context, backup requirements and rollout checks. HTTPS ingress and Flux changes are separate work in the cluster repository.
 
-CI runs frontend lint/typecheck/build, production dependency auditing, Go vet/race tests with PostgreSQL, and govulncheck. After a future authorized push to `main` or a `v*` tag, it builds and pushes `linux/amd64` and `linux/arm64` images to `ghcr.io/nerdswhofish/feedback` with provenance and SBOMs. Pull requests run checks without publishing. Configure required checks and human review before release. Action references are pinned to commits; review dependency and base-image updates regularly.
+CI runs frontend lint/typecheck/build, production dependency auditing, Go vet/race tests with PostgreSQL, and govulncheck on pull requests and `main`. The release dry-run workflow uses [Quill](https://github.com/NerdsWhoFish/quill) to cross-build and package both Linux architectures without publishing or tagging. CI also calls that workflow on `main`, including the Docker build and embedded version/commit checks. Quill tracks its documented `v1` alias; other direct action references are pinned to commits.
+
+### Release
+
+Open [Actions > Release](https://github.com/NerdsWhoFish/feedback/actions/workflows/release.yaml), select `main`, choose the scope and bump, then run the workflow. Only this manual workflow publishes. With no existing tags, `Release` plus `minor` creates `v0.1.0`; `patch` creates `v0.0.1`, and `major` creates `v1.0.0`. `Release Candidate` produces a prerelease; promoting a candidate ignores the bump and uses its version.
+
+Quill runs GoReleaser before Docker. The GoReleaser before hook installs locked frontend dependencies and builds the SPA, then GoReleaser embeds it into static `linux/amd64` and `linux/arm64` binaries. It uploads binary archives and checksums to the GitHub release. The Dockerfile copies those artifacts into distroless and verifies the embedded version and commit before packaging. QEMU runs that verification for ARM64 on the AMD64 runner. The release disables Docker's snapshot dry run and shared cache so stable images consume the final release artifacts. PR and main dry runs still exercise Docker with an explicitly matched snapshot version.
+
+Images publish to `ghcr.io/nerdswhofish/feedback` with SBOMs and provenance. Stable versions receive full, minor and major version tags plus `latest` and `production`. Candidates receive only their full candidate tag. Pin a reviewed digest when deploying.
+
+No custom repository secrets are needed for releases. The workflow uses `GITHUB_TOKEN` with `contents: write` and `packages: write`. Organization policy must allow Actions and GHCR package creation. After the first release, check the package's visibility and set it to public if anonymous pulls are intended; a public repository does not automatically make a new GHCR package public. Configure required CI checks and human review before subsequent changes ship.
+
+Validate release artifacts locally without Docker or publication:
+
+```sh
+goreleaser check
+goreleaser release --snapshot --clean --skip=docker,publish
+```
+
+With Docker running, package a local snapshot using the same verification as CI:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg VERSION="$(jq -r .version dist/metadata.json)" \
+  --build-arg COMMIT="$(git rev-parse HEAD)" \
+  -t feedback:local .
+```
 
 Before production, review both proposed ADRs, register the OIDC client, provision secrets and Grafana Faro, verify Tinyauth's client allowlist, and exercise real OIDC, webhook and telemetry delivery in the target environment. Local tests do not establish that external configuration is correct.
 
 ## License
 
-[Apache License 2.0](LICENSE) is the proposed license for this local v1. Confirm the licensing decision before publishing the repository. Third-party dependencies retain their own licenses.
+[Apache License 2.0](LICENSE). Third-party dependencies retain their own licenses.

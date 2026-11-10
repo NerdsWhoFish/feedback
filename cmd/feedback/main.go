@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,6 +24,7 @@ import (
 )
 
 var version = "dev"
+var commit = "unknown"
 
 func main() {
 	if err := run(); err != nil {
@@ -30,6 +33,17 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version":
+			fmt.Printf("feedback %s (%s)\n", version, commit)
+			return nil
+		case "verify-build":
+			return verifyBuild(os.Getenv("VERSION"), os.Getenv("COMMIT"))
+		default:
+			return errors.New("usage: feedback [version|verify-build]")
+		}
+	}
 	c, err := config.Load()
 	if err != nil {
 		return err
@@ -86,7 +100,7 @@ func run() error {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if db.Ping(ctx) != nil {
-			http.Error(w, "not ready", 503)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(200)
@@ -124,6 +138,16 @@ func run() error {
 	defer cancelShutdown()
 	if server.Shutdown(shutdownCtx) != nil {
 		return errors.New("HTTP shutdown failed")
+	}
+	return nil
+}
+
+func verifyBuild(expectedVersion, expectedCommit string) error {
+	if expectedVersion == "" || expectedCommit == "" {
+		return errors.New("VERSION and COMMIT are required to verify the build")
+	}
+	if version != strings.TrimPrefix(expectedVersion, "v") || commit != expectedCommit {
+		return errors.New("embedded build version or commit does not match the image")
 	}
 	return nil
 }
