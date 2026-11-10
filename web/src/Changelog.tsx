@@ -19,10 +19,7 @@ export function Changelog({
   return (
     <section>
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">OUT IN THE WORLD</p>
-          <h2>Good things, delivered.</h2>
-        </div>
+        <h2>Changelog</h2>
         {admin && !editing && (
           <button className="primary" onClick={() => setEditing("new")}>
             + Add update
@@ -102,8 +99,10 @@ export function Changelog({
         </div>
       ) : (
         !resource.error && (
-          <Empty title="The next chapter is still being written">
-            When something ships, you will find the details here.
+          <Empty title="No updates yet">
+            {admin
+              ? "Select Add update to create a changelog entry."
+              : "Published updates will appear here."}
           </Empty>
         )
       )}

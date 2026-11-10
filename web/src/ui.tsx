@@ -117,7 +117,7 @@ export function Brand() {
         ↗
       </span>
       <span>
-        NERDS WHO FISH<span className="brand-sub">THE FEEDBACK NOTEBOOK</span>
+        NERDS WHO FISH<span className="brand-sub">FEEDBACK</span>
       </span>
     </a>
   );

@@ -170,6 +170,7 @@ type oidcFixture struct {
 	server                 *httptest.Server
 	nonce, challenge, mode string
 	key                    *rsa.PrivateKey
+	email                  string
 }
 
 func provider(t *testing.T) *oidcFixture {
@@ -178,7 +179,7 @@ func provider(t *testing.T) *oidcFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &oidcFixture{key: key}
+	f := &oidcFixture{key: key, email: "admin@example.com"}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -203,7 +204,7 @@ func provider(t *testing.T) *oidcFixture {
 				t.Error(err)
 				return
 			}
-			claims := map[string]any{"iss": f.server.URL, "sub": "browser-user", "aud": "feedback-test", "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "nonce": f.nonce, "email": "admin@example.com", "name": "Admin", "email_verified": true}
+			claims := map[string]any{"iss": f.server.URL, "sub": "browser-user", "aud": "feedback-test", "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "nonce": f.nonce, "email": f.email, "name": "Admin", "email_verified": true}
 			switch f.mode {
 			case "nonce":
 				claims["nonce"] = "wrong"
@@ -215,6 +216,10 @@ func provider(t *testing.T) *oidcFixture {
 				claims["exp"] = time.Now().Add(-time.Hour).Unix()
 			case "unverified":
 				claims["email_verified"] = false
+			case "userinfo":
+				delete(claims, "email")
+				delete(claims, "email_verified")
+				delete(claims, "name")
 			case "azp":
 				claims["aud"] = []string{"feedback-test", "other"}
 				claims["azp"] = "other"
@@ -239,7 +244,11 @@ func provider(t *testing.T) *oidcFixture {
 			if f.mode == "subject" {
 				sub = "other-user"
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"sub": sub, "email": "admin@example.com", "name": "Admin", "email_verified": true})
+			email := f.email
+			if f.mode == "email mismatch" {
+				email = "other@yahoo.com"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"sub": sub, "email": email, "name": "Admin", "email_verified": true})
 		default:
 			w.WriteHeader(404)
 		}
@@ -251,9 +260,27 @@ func provider(t *testing.T) *oidcFixture {
 func TestOIDCFullFlowAndRejection(t *testing.T) {
 	db := database(t)
 	f := provider(t)
-	for _, mode := range []string{"valid", "nonce", "audience", "issuer", "expired", "unverified", "azp", "signature", "subject", "fallback"} {
-		t.Run(mode, func(t *testing.T) {
-			f.mode = mode
+	for _, tc := range []struct {
+		name, mode, email string
+	}{
+		{"valid", "valid", "admin@example.com"},
+		{"nonce", "nonce", "admin@example.com"},
+		{"audience", "audience", "admin@example.com"},
+		{"issuer", "issuer", "admin@example.com"},
+		{"expired", "expired", "admin@example.com"},
+		{"unverified", "unverified", "admin@example.com"},
+		{"azp", "azp", "admin@example.com"},
+		{"signature", "signature", "admin@example.com"},
+		{"subject", "subject", "admin@example.com"},
+		{"fallback", "fallback", "admin@example.com"},
+		{"yahoo email without preferred_username", "valid", "jdfloraroofing@yahoo.com"},
+		{"normalized yahoo email", "valid", " \tJdFloraRoofing@YAHOO.COM "},
+		{"yahoo userinfo without preferred_username", "userinfo", "jdfloraroofing@yahoo.com"},
+		{"unverified yahoo email", "unverified", "jdfloraroofing@yahoo.com"},
+		{"mismatched yahoo email", "email mismatch", "jdfloraroofing@yahoo.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.mode, f.email = tc.mode, tc.email
 			c := config.Config{BaseURL: "http://localhost:8080", Environment: "local", OIDCIssuer: f.server.URL, OIDCClientID: "feedback-test", OIDCClientSecret: "test-only", OIDCRedirectURL: "http://localhost:8080/auth/callback", AdminEmails: map[string]bool{"admin@example.com": true}, SessionTTL: time.Hour, OIDCAuthURL: f.server.URL + "/authorize", OIDCTokenURL: f.server.URL + "/token", OIDCUserInfoURL: f.server.URL + "/userinfo", OIDCJWKSURL: f.server.URL + "/jwks"}
 			a, err := New(context.Background(), db, c)
 			if err != nil {
@@ -281,7 +308,7 @@ func TestOIDCFullFlowAndRejection(t *testing.T) {
 			}
 			callback := httptest.NewRecorder()
 			a.callback(callback, request())
-			valid := mode == "valid" || mode == "fallback"
+			valid := tc.mode == "valid" || tc.mode == "fallback" || tc.mode == "userinfo"
 			if valid {
 				if callback.Code != 303 {
 					t.Fatalf("login failed: %d %s", callback.Code, callback.Body.String())
@@ -299,16 +326,27 @@ func TestOIDCFullFlowAndRejection(t *testing.T) {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.AddCookie(session)
 				a.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if !FromContext(r.Context()).Admin() {
-						t.Error("admin email did not confer admin")
+					p := FromContext(r.Context())
+					wantEmail := strings.ToLower(strings.TrimSpace(tc.email))
+					if p.Email != wantEmail || p.Name != "Admin" || !p.Browser() {
+						t.Errorf("unexpected browser identity: email=%q name=%q role=%q", p.Email, p.Name, p.Role)
+					}
+					if p.Admin() != c.AdminEmails[wantEmail] {
+						t.Error("admin role did not follow the email allowlist")
 					}
 					w.WriteHeader(204)
 				})).ServeHTTP(me, r)
 				if me.Code != 204 {
 					t.Fatal("session failed")
 				}
-			} else if callback.Code < 400 {
-				t.Fatalf("accepted invalid %s", mode)
+			} else {
+				wantStatus := http.StatusUnauthorized
+				if tc.mode == "unverified" {
+					wantStatus = http.StatusForbidden
+				}
+				if callback.Code != wantStatus {
+					t.Fatalf("invalid %s returned %d; want %d", tc.mode, callback.Code, wantStatus)
+				}
 			}
 			replay := httptest.NewRecorder()
 			a.callback(replay, request())

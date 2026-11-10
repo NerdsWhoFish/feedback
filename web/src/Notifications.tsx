@@ -11,9 +11,7 @@ export function NotificationPreferences() {
   const action = useAction();
   return (
     <section>
-      <p className="eyebrow">STAY IN THE LOOP</p>
       <h1>Email notifications</h1>
-      <p className="lede">Follow the ideas you care about, on your terms.</p>
       <div className="panel">
         <h2>Your email preferences</h2>
         <p>

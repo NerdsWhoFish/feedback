@@ -97,61 +97,14 @@ function Landing() {
     <div className="landing">
       <header className="topbar">
         <Brand />
-        <span className="eyebrow">A LITTLE INPUT. A BETTER PRODUCT.</span>
       </header>
-      <main className="landing-grid">
-        <section className="landing-copy">
-          <p className="eyebrow">GOOD IDEAS START A CONVERSATION</p>
-          <h1>
-            What should
-            <br />
-            we build <em>next?</em>
-          </h1>
-          <p className="lede">
-            A place for your ideas, the small frustrations, and the things that
-            would make a real difference.
-          </p>
-          <a className="button primary large" href="/auth/login">
-            Sign in to share an idea <span aria-hidden="true">↗</span>
-          </a>
-          <p className="hint">
-            Use the Google account invited to your project.
-          </p>
-        </section>
-        <aside className="notebook" aria-label="How feedback works">
-          <div className="notebook-top">
-            <span>THE PATH FROM IDEA TO REALITY</span>
-            <span aria-hidden="true">01 / 03</span>
-          </div>
-          <ol>
-            <li>
-              <span className="step-number">01</span>
-              <div>
-                <h2>Put it on the page.</h2>
-                <p>Tell us what you need and why it matters.</p>
-              </div>
-            </li>
-            <li>
-              <span className="step-number">02</span>
-              <div>
-                <h2>Find the right direction.</h2>
-                <p>Discuss, vote, and follow the decisions.</p>
-              </div>
-            </li>
-            <li>
-              <span className="step-number">03</span>
-              <div>
-                <h2>See it out in the world.</h2>
-                <p>Track progress from first thought to shipped.</p>
-              </div>
-            </li>
-          </ol>
-          <p className="notebook-foot">
-            YOUR EXPERIENCE SHAPES WHAT COMES NEXT.
-          </p>
-        </aside>
+      <main className="shell">
+        <h1>Feature requests</h1>
+        <p>Sign in with the email added to your project.</p>
+        <a className="button primary" href="/auth/login">
+          Sign in
+        </a>
       </main>
-      <footer>Made with care by Nerds Who Fish.</footer>
     </div>
   );
 }
@@ -217,10 +170,6 @@ function Workspace({ user }: { user: User }) {
             <span aria-hidden="true">✉</span> Email preferences
           </button>
         </nav>
-        <div className="sidebar-note">
-          <span className="eyebrow">A WORK IN PROGRESS</span>
-          <p>Good products get better through honest conversations.</p>
-        </div>
       </aside>
       <div className="content">
         <Notice error={projects.error} />
@@ -261,11 +210,11 @@ function Workspace({ user }: { user: User }) {
           !projects.loading && (
             <Empty
               title={
-                admin ? "Start with a project" : "No projects assigned yet"
+                admin ? "No projects yet" : "No projects assigned yet"
               }
             >
               {admin
-                ? "Open Administration to create the first project and invite its members."
+                ? "Open Administration to create a project and add members."
                 : "You are signed in, but your account has not been invited to a project. Ask the project owner to add your email address."}
             </Empty>
           )
@@ -306,7 +255,6 @@ function PublicStatus({ token }: { token: string }) {
         ) : (
           request.data && (
             <>
-              <p className="eyebrow">FROM THE FEEDBACK NOTEBOOK</p>
               <h1>{request.data.title}</h1>
               <StatusBadge status={request.data.status} />
               <section className="panel">

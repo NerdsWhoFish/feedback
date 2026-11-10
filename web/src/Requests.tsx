@@ -35,12 +35,9 @@ export function Requests({
   return (
     <section>
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">THE IDEA BOARD</p>
-          <h2>Make room for better.</h2>
-        </div>
+        <h2>Feature requests</h2>
         <button className="primary" onClick={() => setCreating((v) => !v)}>
-          {creating ? "Close form" : "+ Share an idea"}
+          {creating ? "Close form" : "+ New request"}
         </button>
       </div>
       {creating && (
@@ -70,7 +67,6 @@ export function Requests({
             ))}
           </select>
         </label>
-        <span className="hint">Ideas, improvements, and next steps.</span>
       </div>
       <Notice error={resource.error} />
       {resource.loading ? (
@@ -111,13 +107,13 @@ export function Requests({
           <Empty
             title={
               status
-                ? "Nothing in this status yet"
-                : "A fresh page for your next idea"
+                ? "No requests with this status"
+                : "No requests yet"
             }
           >
             {status
               ? "Try a different filter to see more requests."
-              : "Notice something that could work better? Share the first idea for this project."}
+              : "Select New request to create a request for this project."}
           </Empty>
         )
       )}
@@ -154,13 +150,13 @@ function SubmitRequest({
             );
             onCreated(request);
           },
-          "Your idea is on the board.",
+          "Request submitted.",
           "request.submit",
         );
       }}
     >
-      <h3>Tell us what would help.</h3>
-      <Field label="Give your idea a title">
+      <h3>New request</h3>
+      <Field label="Request title">
         <input
           autoFocus
           required
@@ -184,7 +180,7 @@ function SubmitRequest({
       </Field>
       <Notice error={action.error} />
       <button className="primary" disabled={action.busy}>
-        {action.busy ? "Sharing..." : "Share idea ↗"}
+        {action.busy ? "Submitting..." : "Submit request"}
       </button>
     </form>
   );
@@ -331,7 +327,7 @@ export function RequestDetail({
                 }}
               >
                 <div>
-                  <h3>Move this idea forward</h3>
+                  <h3>Request status</h3>
                   <p className="hint">
                     Only an administrator can authorize a build.
                   </p>
@@ -361,7 +357,7 @@ export function RequestDetail({
             )}
             <div className="detail-columns">
               <section>
-                <h3>Conversation</h3>
+                <h3>Comments</h3>
                 {comments.items.length ? (
                   comments.items.map((comment) => (
                     <article
@@ -407,7 +403,7 @@ export function RequestDetail({
                     );
                   }}
                 >
-                  <Field label="Add to the conversation">
+                  <Field label="Add a comment">
                     <textarea
                       required
                       maxLength={10000}
@@ -433,7 +429,6 @@ export function RequestDetail({
                 </form>
               </section>
               <aside className="history">
-                <p className="eyebrow">THE STORY SO FAR</p>
                 <h3>Progress</h3>
                 <ol className="timeline">
                   {history.items.map((entry) => (

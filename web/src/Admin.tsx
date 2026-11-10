@@ -30,12 +30,7 @@ export function Admin({
   return (
     <section>
       <div className="project-heading">
-        <p className="eyebrow">KEEP THINGS IN ORDER</p>
         <h1>Administration</h1>
-        <p>
-          Choose who can participate, connect your apps, and keep everyone in
-          the loop.
-        </p>
       </div>
       <nav className="tabs" aria-label="Administration">
         {tabs.map((item) => (
@@ -65,7 +60,7 @@ export function Admin({
         )
       ) : (
         <Empty title="Choose a project first">
-          Create a project before inviting members or connecting webhooks.
+          Create a project before adding members or connecting webhooks.
         </Empty>
       )}
     </section>
@@ -83,7 +78,7 @@ function Projects({
   return (
     <>
       <div className="section-heading">
-        <h2>{creating ? "A new place for ideas" : project?.name}</h2>
+        <h2>{creating ? "New project" : project?.name}</h2>
         {project && (
           <button onClick={() => setCreating((v) => !v)}>
             {creating ? "Edit current project" : "+ New project"}
@@ -221,7 +216,7 @@ function Members({ project }: { project: Project }) {
           }, "Membership added. The person can now sign in with this address.");
         }}
       >
-        <Field label="Google account email">
+        <Field label="Email">
           <input
             type="email"
             required
@@ -268,7 +263,7 @@ function Members({ project }: { project: Project }) {
         </ul>
       ) : (
         <Empty title="No members yet">
-          Add the Google account email for each person who should have access.
+          Add the email for each person who should have access.
         </Empty>
       )}
       <Pagination
@@ -325,7 +320,7 @@ function Keys({ projects }: { projects: Project[] }) {
   const action = useAction();
   return (
     <>
-      <h2>Connect with clear boundaries.</h2>
+      <h2>API keys</h2>
       <p className="muted">
         Application keys submit on behalf of their users. Assistant keys work
         only on approved requests. Both are limited to the projects you select.
@@ -497,7 +492,7 @@ function Webhooks({ project }: { project: Project }) {
   const action = useAction();
   return (
     <>
-      <h2>Updates for your other tools.</h2>
+      <h2>Webhooks</h2>
       <p className="muted">
         Send signed events to a public HTTPS endpoint. Failed deliveries retry
         automatically.
