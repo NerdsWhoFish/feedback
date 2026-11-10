@@ -1,0 +1,1165 @@
+openapi: 3.1.0
+info:
+  title: Nerds Who Fish Feedback API
+  version: 1.0.0
+  license:
+    name: Apache License 2.0
+    identifier: Apache-2.0
+  description: |
+    Project-private feedback with browser, app and assistant identities.
+    API keys use Authorization: Bearer. Cookie-authenticated mutations require
+    X-CSRF-Token from GET /api/v1/me and Origin exactly matching BASE_URL.
+    Project access is denied by default. Browser admins see every project.
+    App keys are scoped to projects and may submit and read their own end users'
+    requests. App reads require external_id and never link users by email.
+    Assistant keys cannot approve new work or manage administration resources.
+    Lists use limit/offset pagination. Empty lists return items: [].
+    All JSON request objects reject unknown fields and have a 64 KiB body limit.
+servers:
+  - url: https://feedback.nerdswhofish.com
+  - url: http://localhost:8080
+security:
+  - session: []
+  - apiKey: []
+tags:
+  - name: Authentication
+    description: OIDC browser login and server-side sessions.
+  - name: Projects
+    description: Project selection and scoped visibility.
+  - name: Requests
+    description: Request submission, discussion, votes and status history.
+  - name: Changelog
+    description: Shipped work summaries per project.
+  - name: Administration
+    description: Browser-admin project access, integration keys and webhooks.
+  - name: Public
+    description: Opt-in projections without author metadata.
+  - name: Operations
+    description: Health, readiness and privacy-filtered telemetry.
+paths:
+  /auth/login:
+    get:
+      operationId: login
+      tags: [Authentication]
+      summary: Begin OIDC authorization code login with PKCE S256
+      security: []
+      responses:
+        '302':
+          description: Redirect to the trusted OIDC provider and set a short-lived state cookie.
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+        default: {$ref: '#/components/responses/Error'}
+  /auth/callback:
+    get:
+      operationId: oidcCallback
+      tags: [Authentication]
+      summary: Validate the provider response and create an application session
+      description: Requires the browser's matching state cookie and a single-use stored state.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: {type: string}
+        - name: state
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '303':
+          description: Session cookie set; redirect to the portal root.
+        default: {$ref: '#/components/responses/Error'}
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [Authentication]
+      summary: Revoke the current browser session
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '204': {description: Session revoked and cookie cleared.}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/me:
+    get:
+      operationId: currentUser
+      tags: [Authentication]
+      summary: Get the current browser user and CSRF token
+      security: [{session: []}]
+      responses:
+        '200':
+          description: Current user. Treat the CSRF token as session-sensitive.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CurrentUser'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      tags: [Projects]
+      summary: List accessible projects
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Membership-filtered projects, key scopes, or every project for a browser admin.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Project'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createProject
+      tags: [Administration]
+      summary: Create a project as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/ProjectInput'}
+                - required: [slug, name]
+      responses:
+        '201':
+          description: Created project.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    patch:
+      operationId: updateProject
+      tags: [Administration]
+      summary: Update selected project fields as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectInput'}
+      responses:
+        '200':
+          description: Updated project.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/requests:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    get:
+      operationId: listRequests
+      tags: [Requests]
+      summary: List requests in an accessible project
+      description: App keys must supply external_id; results include only that app user's requests.
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+        - {$ref: '#/components/parameters/ExternalID'}
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/Status'}
+      responses:
+        '200':
+          description: Requests ordered newest first, with UUID as the stable tie-breaker.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Request'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createRequest
+      tags: [Requests]
+      summary: Submit a request as a member or an application
+      description: |
+        App keys require end_user. Browser submissions cannot assert another user.
+        Status starts at open. Source is assigned by the server as portal or
+        app:<app_name>. Assistant keys cannot submit requests.
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: {type: string, minLength: 1, maxLength: 200}
+                description: {type: string, maxLength: 20000, default: ''}
+                end_user: {$ref: '#/components/schemas/EndUser'}
+      responses:
+        '201':
+          description: Created request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Request'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getRequest
+      tags: [Requests]
+      summary: Read a request, visible comments and status history
+      description: |
+        Project membership or key scope is required. App keys additionally require
+        an owning external_id in their own namespace. Internal comments are visible
+        only to browser admins and assistant keys. Includes the first 100 comments
+        and history entries plus total counts; use the collection endpoints for
+        subsequent pages. Empty comments/history may be omitted.
+      parameters:
+        - {$ref: '#/components/parameters/ExternalID'}
+      responses:
+        '200':
+          description: Request details.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Request'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}/comments:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: listComments
+      tags: [Requests]
+      summary: Page through visible request comments
+      description: Same project and app ownership checks as request detail. Internal comments require staff access.
+      parameters:
+        - {$ref: '#/components/parameters/ExternalID'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Visible comments in chronological order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Comment'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: addComment
+      tags: [Requests]
+      summary: Comment as a project member, browser admin or scoped assistant
+      description: Only browser admins and assistants may set internal=true. App keys cannot comment.
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: {type: string, minLength: 1, maxLength: 10000}
+                internal: {type: boolean, default: false}
+      responses:
+        '201':
+          description: Created comment.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Comment'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}/history:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: listHistory
+      tags: [Requests]
+      summary: Page through request status history
+      description: Same project and app ownership checks as request detail.
+      parameters:
+        - {$ref: '#/components/parameters/ExternalID'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Status history in chronological order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/History'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}/status:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    post:
+      operationId: changeStatus
+      tags: [Requests]
+      summary: Change status and append actor-attributed history
+      description: |
+        Browser admins can choose any status. Assistants may move approved_for_build
+        to in_progress, or authorized in_progress to shipped or approved_for_build.
+        These transitions require a prior admin approval. An admin moving open
+        directly to in_progress does not grant assistant authorization. All other
+        assistant transitions are forbidden, including self-approval and decline.
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: {$ref: '#/components/schemas/Status'}
+      responses:
+        '200':
+          description: Updated request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Request'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/requests/{id}/vote:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    put:
+      operationId: vote
+      tags: [Requests]
+      summary: Add the current browser user's vote, idempotently
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '200': {$ref: '#/components/responses/Votes'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      operationId: removeVote
+      tags: [Requests]
+      summary: Remove the current browser user's vote, idempotently
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '200': {$ref: '#/components/responses/Votes'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/changelog:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    get:
+      operationId: listChangelog
+      tags: [Changelog]
+      summary: List changelog entries for project members and assistants
+      description: App keys are not permitted.
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Changelog, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Changelog'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: addChangelog
+      tags: [Changelog]
+      summary: Add a changelog entry as a browser admin or scoped assistant
+      description: Every linked request must be shipped and belong to this project.
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChangelogInput'}
+      responses:
+        '201':
+          description: Created changelog entry.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Changelog'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/memberships:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    get:
+      operationId: listMemberships
+      tags: [Administration]
+      summary: List project memberships as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Membership emails.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Membership'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: addMembership
+      tags: [Administration]
+      summary: Add an email membership as a browser admin, idempotently
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Membership'}
+      responses:
+        '201':
+          description: Normalized membership email.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Membership'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/memberships/{email}:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+      - name: email
+        in: path
+        required: true
+        description: URL-encoded member email.
+        schema: {type: string, format: email}
+    delete:
+      operationId: removeMembership
+      tags: [Administration]
+      summary: Remove a membership as a browser admin, idempotently
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '204': {description: Membership removed.}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/keys:
+    get:
+      operationId: listKeys
+      tags: [Administration]
+      summary: List key metadata as a browser admin
+      description: Tokens and hashes are never returned. Revoked keys remain visible.
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Key metadata and project scopes.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Key'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createKey
+      tags: [Administration]
+      summary: Issue an app or assistant key as a browser admin
+      description: |
+        The token is returned exactly once. App keys require a lowercase app_name.
+        Assistant keys must omit app_name or use an empty string. Reusing an app
+        name across rotated keys preserves its end-user identity namespace.
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KeyInput'}
+      responses:
+        '201':
+          description: Key metadata and one-time bearer token.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Key'}
+                  - type: object
+                    required: [token]
+                    properties:
+                      token: {type: string}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/keys/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: revokeKey
+      tags: [Administration]
+      summary: Revoke a key as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '204': {description: Key revoked. Repeated revocation is harmless.}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/webhooks:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    get:
+      operationId: listWebhooks
+      tags: [Administration]
+      summary: List webhook metadata as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Webhooks without signing secrets.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Webhook'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createWebhook
+      tags: [Administration]
+      summary: Register a public HTTPS webhook as a browser admin
+      description: Requires server webhook encryption configuration. Signing secret is shown once.
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url, events]
+              properties:
+                url: {type: string, format: uri, maxLength: 2048}
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items: {$ref: '#/components/schemas/EventType'}
+      responses:
+        '201':
+          description: Webhook metadata with its one-time signing secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Webhook'}
+                  - type: object
+                    required: [secret]
+                    properties:
+                      secret: {type: string}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/webhooks/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: disableWebhook
+      tags: [Administration]
+      summary: Disable a webhook as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CSRF'}
+        - {$ref: '#/components/parameters/Origin'}
+      responses:
+        '204': {description: Webhook disabled; existing delivery history is retained.}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/projects/{project}/deliveries:
+    parameters:
+      - {$ref: '#/components/parameters/Project'}
+    get:
+      operationId: listDeliveries
+      tags: [Administration]
+      summary: Inspect webhook delivery outcomes as a browser admin
+      security: [{session: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Delivery log, without signing secrets or receiver response bodies.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/Delivery'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/public/requests/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{64}$'}
+    get:
+      operationId: publicRequest
+      tags: [Public]
+      summary: Read a shared status page without author information
+      description: |
+        Only available when the owning project's public_status_page is enabled.
+        Includes title, status, public comment text and actor-free history.
+        Never returns description, author metadata, source or internal comments.
+        User-written text can itself contain personal information.
+      security: []
+      responses:
+        '200':
+          description: Public status projection.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PublicRequest'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/public/requests/{token}/comments:
+    parameters:
+      - {$ref: '#/components/parameters/PublicToken'}
+    get:
+      operationId: publicComments
+      tags: [Public]
+      summary: Page through public comment text without authors
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Public comments only, while the project has public sharing enabled.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/PublicComment'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/public/requests/{token}/history:
+    parameters:
+      - {$ref: '#/components/parameters/PublicToken'}
+    get:
+      operationId: publicHistory
+      tags: [Public]
+      summary: Page through public status history without actors
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Actor-free status history, while the project has public sharing enabled.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: {$ref: '#/components/schemas/PublicHistory'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/config:
+    get:
+      operationId: frontendConfig
+      tags: [Operations]
+      summary: Read public frontend configuration without secrets
+      security: []
+      responses:
+        '200':
+          description: Telemetry feature flag and release identity, without collector URLs or credentials.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [telemetry_enabled, version, environment]
+                properties:
+                  telemetry_enabled: {type: boolean}
+                  version: {type: string}
+                  environment: {type: string}
+  /api/v1/telemetry:
+    post:
+      operationId: browserTelemetry
+      tags: [Operations]
+      summary: Send a privacy-filtered browser telemetry envelope
+      description: |
+        Frontend-internal Faro relay. Requires the configured origin when enabled,
+        but no account session. The server reconstructs the outgoing envelope from
+        allowlisted event names and bounded Web Vitals values, discards arbitrary
+        metadata and text, and substitutes fixed messages for errors. Unknown fields
+        are ignored, never forwarded. Maximum body size 64 KiB. Rate limit is shared
+        across this process. Disabled telemetry accepts and discards the envelope.
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Origin'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: {type: string}
+                measurements:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: {type: string, enum: [web-vital, web-vitals]}
+                      values:
+                        type: object
+                        additionalProperties: {type: number}
+                exceptions: {type: array, items: {type: object}}
+                logs: {type: array, items: {type: object}}
+      responses:
+        '202': {description: Sanitized telemetry accepted by the collector.}
+        '204': {description: Telemetry disabled or nothing allowlisted to send.}
+        default: {$ref: '#/components/responses/Error'}
+  /healthz:
+    get:
+      operationId: health
+      tags: [Operations]
+      summary: Process liveness
+      security: []
+      responses:
+        '200': {description: Process is alive.}
+  /readyz:
+    get:
+      operationId: ready
+      tags: [Operations]
+      summary: Database readiness
+      security: []
+      responses:
+        '200': {description: Database is reachable.}
+        '503': {description: Database is unavailable.}
+webhooks:
+  projectEvent:
+    post:
+      operationId: receiveProjectEvent
+      tags: [Administration]
+      summary: Receive an outbound project event
+      description: |
+        Delivered to an admin-configured public HTTPS endpoint. Authenticate by
+        HMAC-SHA256, not the application session or bearer key. The literal one-time
+        secret is the HMAC key; input is the timestamp header, a dot, and exact raw
+        request bytes. Compare signatures in constant time, enforce a timestamp
+        tolerance and deduplicate X-Feedback-Delivery. Retries reuse the delivery UUID
+        and body but have fresh timestamps/signatures. Up to 8 attempts, with
+        exponential delays starting at 15 seconds. Internal comments emit no event.
+      security: []
+      parameters:
+        - name: X-Feedback-Delivery
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+        - name: X-Feedback-Timestamp
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[0-9]+$'}
+        - name: X-Feedback-Signature
+          in: header
+          required: true
+          schema: {type: string, pattern: '^sha256=[a-f0-9]{64}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WebhookEvent'}
+      responses:
+        '200': {description: Any 2xx response acknowledges receipt.}
+        default: {description: A non-2xx response or transport error causes a retry until exhausted.}
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-feedback
+      description: Secure, HttpOnly, SameSite=Lax application session. Local HTTP uses feedback_local.
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque API key
+      description: Project-scoped app or assistant key. Revoked keys are rejected.
+  parameters:
+    PublicToken:
+      name: token
+      in: path
+      required: true
+      schema: {type: string, pattern: '^[a-f0-9]{64}$'}
+    Project:
+      name: project
+      in: path
+      required: true
+      description: Project UUID or lowercase slug.
+      schema: {type: string}
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+    Offset:
+      name: offset
+      in: query
+      schema: {type: integer, minimum: 0, maximum: 1000000, default: 0}
+    ExternalID:
+      name: external_id
+      in: query
+      description: Required for app-key request reads; scoped to the app's own namespace.
+      schema: {type: string, minLength: 1, maxLength: 255}
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      description: Required on cookie-authenticated writes. Read from GET /api/v1/me. Unused for bearer auth.
+      schema: {type: string}
+    Origin:
+      name: Origin
+      in: header
+      description: Required on cookie-authenticated writes and must equal BASE_URL. Unused for bearer auth.
+      schema: {type: string, format: uri}
+  responses:
+    Error:
+      description: |
+        JSON error. 400 invalid input or login, 401 missing/invalid authentication,
+        403 forbidden or invalid CSRF, 404 missing or inaccessible resource,
+        409 conflict, 415 unsupported content type, 429 rate limited,
+        500 internal failure, or 503 unavailable dependency/configuration.
+      headers:
+        Retry-After:
+          description: Present for key rate limits; retry delay in seconds.
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Votes:
+      description: Current aggregate vote count.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [votes]
+            properties:
+              votes: {type: integer, minimum: 0}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+    Page:
+      type: object
+      required: [items, limit, offset]
+      properties:
+        items: {type: array, items: {}}
+        limit: {type: integer}
+        offset: {type: integer}
+    Status:
+      type: string
+      enum: [open, under_review, planned, approved_for_build, in_progress, shipped, declined]
+    CurrentUser:
+      type: object
+      required: [user_id, email, role, csrf_token]
+      properties:
+        user_id: {type: string, format: uuid}
+        email: {type: string, format: email}
+        name: {type: string}
+        role: {type: string, enum: [admin, member]}
+        csrf_token: {type: string}
+    ProjectInput:
+      type: object
+      additionalProperties: false
+      properties:
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+          description: Must not be shaped like a UUID, which is reserved for ID addressing.
+        name: {type: string, minLength: 1, maxLength: 150}
+        description: {type: string, maxLength: 5000}
+        public_status_page: {type: boolean, default: false}
+    Project:
+      type: object
+      required: [id, slug, name, description, public_status_page]
+      properties:
+        id: {type: string, format: uuid}
+        slug: {type: string}
+        name: {type: string}
+        description: {type: string}
+        public_status_page: {type: boolean}
+    EndUser:
+      type: object
+      additionalProperties: false
+      required: [external_id, email, name]
+      properties:
+        external_id: {type: string, minLength: 1, maxLength: 255}
+        email: {type: string, format: email, maxLength: 254}
+        name: {type: string, minLength: 1, maxLength: 150}
+    Request:
+      type: object
+      required: [id, project_id, title, description, status, source, votes, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        project_id: {type: string, format: uuid}
+        title: {type: string}
+        description: {type: string}
+        status: {$ref: '#/components/schemas/Status'}
+        source:
+          type: string
+          description: Server-assigned portal or app:<app_name>. Reserved assistant source is not used for v1 submission.
+        votes: {type: integer, minimum: 0}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        public_token:
+          type: string
+          description: Only returned to a browser admin or browser author; project opt-in controls whether it works.
+        comments:
+          type: array
+          items: {$ref: '#/components/schemas/Comment'}
+        comments_total: {type: integer, minimum: 0}
+        history:
+          type: array
+          items: {$ref: '#/components/schemas/History'}
+        history_total: {type: integer, minimum: 0}
+    Comment:
+      type: object
+      required: [id, body, internal, author_name, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        body: {type: string}
+        internal: {type: boolean}
+        author_name: {type: string}
+        created_at: {type: string, format: date-time}
+    History:
+      type: object
+      required: [id, from_status, to_status, actor_name, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        from_status: {$ref: '#/components/schemas/Status'}
+        to_status: {$ref: '#/components/schemas/Status'}
+        actor_name: {type: string}
+        created_at: {type: string, format: date-time}
+    ChangelogInput:
+      type: object
+      additionalProperties: false
+      required: [title, body]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 20000}
+        request_ids:
+          type: array
+          maxItems: 100
+          items: {type: string, format: uuid}
+    Changelog:
+      type: object
+      required: [id, title, body, created_at, request_ids]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        body: {type: string}
+        created_at: {type: string, format: date-time}
+        request_ids:
+          type: array
+          items: {type: string, format: uuid}
+    Membership:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: {type: string, format: email, maxLength: 254}
+    KeyInput:
+      type: object
+      additionalProperties: false
+      required: [name, key_type, project_ids]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 150}
+        key_type: {type: string, enum: [app, assistant]}
+        app_name: {type: string, maxLength: 63}
+        project_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {type: string, format: uuid}
+    Key:
+      type: object
+      required: [id, name, key_type, app_name, project_ids, created_at, revoked_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        key_type: {type: string, enum: [app, assistant]}
+        app_name: {type: string}
+        project_ids:
+          type: array
+          items: {type: string, format: uuid}
+        created_at: {type: string, format: date-time}
+        revoked_at: {type: [string, 'null'], format: date-time}
+    EventType:
+      type: string
+      enum: [status_changed, request_created, comment_created]
+    Webhook:
+      type: object
+      required: [id, url, events, created_at, disabled_at]
+      properties:
+        id: {type: string, format: uuid}
+        url: {type: string, format: uri}
+        events:
+          type: array
+          items: {$ref: '#/components/schemas/EventType'}
+        created_at: {type: string, format: date-time}
+        disabled_at: {type: [string, 'null'], format: date-time}
+    WebhookEvent:
+      type: object
+      additionalProperties: false
+      required: [event, project_id, request_id]
+      properties:
+        event: {$ref: '#/components/schemas/EventType'}
+        project_id: {type: string, format: uuid}
+        request_id: {type: string, format: uuid}
+        status:
+          description: Present for request_created and status_changed.
+          $ref: '#/components/schemas/Status'
+        from_status:
+          description: Present for status_changed.
+          $ref: '#/components/schemas/Status'
+        comment_id:
+          type: string
+          format: uuid
+          description: Present for comment_created. Comment text and author data are excluded.
+    Delivery:
+      type: object
+      required: [id, webhook_id, event, attempts, last_status, last_error, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        webhook_id: {type: string, format: uuid}
+        event: {$ref: '#/components/schemas/EventType'}
+        attempts: {type: integer, minimum: 0}
+        next_attempt_at: {type: string, format: date-time}
+        completed_at: {type: [string, 'null'], format: date-time}
+        last_status: {type: integer, description: Zero when no HTTP response was received.}
+        last_error: {type: string, description: 'Bounded outcome code, never the receiver response body.'}
+        created_at: {type: string, format: date-time}
+        delivery_log:
+          type: array
+          items:
+            type: object
+            required: [attempt, status, outcome, created_at]
+            properties:
+              attempt: {type: integer, minimum: 1}
+              status: {type: integer}
+              outcome: {type: string}
+              created_at: {type: string, format: date-time}
+    PublicRequest:
+      type: object
+      additionalProperties: false
+      required: [title, status, comments, history, comments_total, history_total]
+      properties:
+        title: {type: string}
+        status: {$ref: '#/components/schemas/Status'}
+        comments:
+          type: array
+          items: {$ref: '#/components/schemas/PublicComment'}
+        comments_total: {type: integer, minimum: 0}
+        history:
+          type: array
+          items: {$ref: '#/components/schemas/PublicHistory'}
+        history_total: {type: integer, minimum: 0}
+    PublicComment:
+      type: object
+      additionalProperties: false
+      required: [body, created_at]
+      properties:
+        body: {type: string}
+        created_at: {type: string, format: date-time}
+    PublicHistory:
+      type: object
+      additionalProperties: false
+      required: [from_status, to_status, created_at]
+      properties:
+        from_status: {$ref: '#/components/schemas/Status'}
+        to_status: {$ref: '#/components/schemas/Status'}
+        created_at: {type: string, format: date-time}

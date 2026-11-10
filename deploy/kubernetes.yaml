@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: feedback
+data:
+  ENVIRONMENT: production
+  HTTP_ADDR: ":8080"
+  BASE_URL: https://feedback.nerdswhofish.com
+  OIDC_ISSUER: https://auth.theoutdoorprogrammer.com
+  OIDC_REDIRECT_URL: https://feedback.nerdswhofish.com/auth/callback
+  SESSION_TTL: 12h
+  KEY_RATE_LIMIT_RPM: "120"
+  OTEL_EXPORTER_OTLP_ENDPOINT: https://otlp-gateway-prod-us-east-3.grafana.net/otlp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feedback
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: feedback
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: feedback
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: feedback
+          image: ghcr.io/nerdswhofish/feedback:main
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: feedback
+            - secretRef:
+                name: feedback
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: feedback
+spec:
+  selector:
+    app.kubernetes.io/name: feedback
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+# The cluster repo owns HTTPS ingress, DNS, network policy and Flux wiring.
