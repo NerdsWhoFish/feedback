@@ -22,6 +22,7 @@ type Config struct {
 	WebhookKey                                                  []byte
 	FaroURL                                                     string
 	MetricsAddress, ResendAPIKey, EmailFrom                     string
+	WebhookURL, WebhookSecret                                   string
 }
 
 func Load() (Config, error) {
@@ -32,6 +33,16 @@ func Load() (Config, error) {
 	c.MetricsAddress = os.Getenv("METRICS_ADDR")
 	c.ResendAPIKey = os.Getenv("RESEND_API_KEY")
 	c.EmailFrom = os.Getenv("EMAIL_FROM")
+	c.WebhookURL = os.Getenv("WEBHOOK_URL")
+	c.WebhookSecret = os.Getenv("WEBHOOK_SECRET")
+	if c.WebhookURL != "" {
+		if !ValidWebhookEndpoint(c.WebhookURL) {
+			return c, errors.New("WEBHOOK_URL must be HTTPS or HTTP on loopback or an in-cluster host, without credentials, query or fragment")
+		}
+		if strings.TrimSpace(c.WebhookSecret) == "" {
+			return c, errors.New("WEBHOOK_SECRET is required when WEBHOOK_URL is configured")
+		}
+	}
 	if c.MetricsAddress != "" {
 		_, port, err := net.SplitHostPort(c.MetricsAddress)
 		n, parseErr := strconv.Atoi(port)

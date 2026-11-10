@@ -28,6 +28,7 @@ type Server struct {
 	db         *pgxpool.Pool
 	log        *slog.Logger
 	webhookKey []byte
+	outgoing   *outgoingConfig
 	email      *emailConfig
 	metrics    *telemetry.Metrics
 }

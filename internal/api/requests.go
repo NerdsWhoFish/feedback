@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NerdsWhoFish/feedback/internal/auth"
+	"github.com/NerdsWhoFish/feedback/internal/webhook"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -205,6 +206,9 @@ func (s *Server) createRequest(w http.ResponseWriter, r *http.Request) error {
 	if err = s.enqueueEmail(r.Context(), tx, requestID, "request_created"); err != nil {
 		return err
 	}
+	if err = s.enqueueOutgoing(r.Context(), tx, requestID, "request.created", p, nil, nil); err != nil {
+		return err
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		return err
 	}
@@ -273,6 +277,9 @@ func (s *Server) addComment(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		if err = s.enqueueEmail(r.Context(), tx, v.ID, "comment_created"); err != nil {
+			return err
+		}
+		if err = s.enqueueOutgoing(r.Context(), tx, v.ID, "comment.created", p, &webhook.Comment{ID: items[0]["id"].(string), Body: in.Body}, nil); err != nil {
 			return err
 		}
 	}
@@ -347,6 +354,9 @@ func (s *Server) changeStatus(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if err = s.enqueueEmail(r.Context(), tx, v.ID, "status_changed"); err != nil {
+		return err
+	}
+	if err = s.enqueueOutgoing(r.Context(), tx, v.ID, "request.status_changed", p, nil, &webhook.Change{From: from, To: in.Status}); err != nil {
 		return err
 	}
 	if err = tx.Commit(r.Context()); err != nil {

@@ -71,6 +71,8 @@ Tests create isolated schemas in the supplied database. Never point the test con
 | `SESSION_TTL` | Session lifetime, default `12h`, allowed range `1m` through `168h`. |
 | `KEY_RATE_LIMIT_RPM` | Token bucket capacity and refill rate per key, per process, default `120`. |
 | `WEBHOOK_ENCRYPTION_KEY` | Base64-encoded 32-byte key protecting webhook signing secrets at rest. Required outside local mode and to create webhooks. Back it up with PostgreSQL. |
+| `WEBHOOK_URL` | Optional trusted outgoing receiver for all projects. HTTPS, or HTTP on loopback or an in-cluster DNS host. Unset disables this sender and its enqueue/cleanup work. See [outgoing webhooks](docs/webhooks.md). |
+| `WEBHOOK_SECRET` | Required when `WEBHOOK_URL` is set. Server-only HMAC-SHA256 signing secret; use at least 32 random bytes. Independent of `WEBHOOK_ENCRYPTION_KEY`. |
 | `RESEND_API_KEY` | Server-only Resend API key. Unset disables email enqueue and delivery cleanly. |
 | `EMAIL_FROM` | Required when Resend is enabled, for example `feedback@nerdswhofish.com`. Verify the sending domain in Resend first. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP/protobuf base endpoint. Use an in-cluster Alloy receiver such as `http://alloy.monitoring.svc:4318`, or `https://otlp-gateway-prod-us-east-3.grafana.net/otlp` for direct Grafana Cloud export. |
@@ -140,13 +142,27 @@ The server checks key scope, app namespace and end-user ownership. A matching em
 
 Create a separate `assistant` key scoped to the projects it should operate. It may search scoped requests, post public or internal comments, and draft changelog entries linked to shipped requests. It cannot publish changelog entries, submit new requests, manage projects, memberships, keys or webhooks, or make approval and decline decisions.
 
+A browser admin creates it in **Administration > API keys > Assistant** at `/#view=admin`, or through `POST /api/v1/keys` with `{"name":"Triage assistant","key_type":"assistant","project_ids":["<project UUID>"]}`. Omit `app_name` or pass an empty string. Cookie-authenticated creation requires the session cookie, exact `Origin: https://feedback.nerdswhofish.com` and `X-CSRF-Token` from `GET /api/v1/me`. The `201` response's `token` is shown once: `nwf_` followed by 64 lowercase hex characters (32 random bytes). Only its SHA-256 hash is stored. Use `Authorization: Bearer <token>` for assistant calls, without browser cookies or CSRF. A revoked key is rejected; the default rate limit is 120 requests per minute per key per process.
+
+| Operation | Route / JSON body |
+| --- | --- |
+| Discover scoped projects | `GET /api/v1/projects` |
+| List/search requests | `GET /api/v1/projects/{UUID-or-slug}/requests?status=open&q=filters&limit=50&offset=0` |
+| Get a request | `GET /api/v1/requests/{request-UUID}` |
+| Page comments / history | `GET /api/v1/requests/{request-UUID}/comments` or `/history` |
+| Comment | `POST /api/v1/requests/{request-UUID}/comments` with `{"body":"Please clarify the filters.","internal":false}` |
+| Change status | `POST /api/v1/requests/{request-UUID}/status` with `{"status":"in_progress"}` |
+| Revoke a key as a browser admin | `DELETE /api/v1/keys/{key-UUID}` |
+
+Project scopes are mandatory and checked on every operation; out-of-scope resources are hidden with `404`. Assistant reads do not require `external_id`. There is no granular read/comment-only or triage-only scope. The existing assistant type already prevents initial build approval, but also cannot change new requests to `under_review`, `planned` or `declined`. A triage assistant can read and comment under the existing policy; changing that policy needs a separate decision.
+
 | Current status | Assistant may set |
 | --- | --- |
 | `approved_for_build` | `in_progress` |
 | `in_progress` | `shipped`, `approved_for_build` |
 | Any other status | Nothing |
 
-Only a browser admin can grant `approved_for_build` to previously unapproved work. Returning an already authorized `in_progress` request to the queue is allowed. Status changes and their actor are recorded transactionally.
+Only a browser admin can grant `approved_for_build` to previously unapproved work. Every assistant transition in the table additionally requires the persisted `build_authorized` flag. Returning an already authorized `in_progress` request to `approved_for_build` is allowed; an attempt to approve `open` or `under_review` work returns `403`. Status changes and their actor are recorded transactionally.
 
 ```sh
 curl --fail-with-body --get \
@@ -178,6 +194,8 @@ Moving a request to `shipped` creates one linked draft in the same database tran
 Admins review drafts in Changelog, edit their title/body, and publish when ready. Members only see published entries. Assistants can read and create drafts but cannot publish or edit existing entries. REST creation defaults to a draft; browser admins can supply `published: true`. Admins use `PATCH /api/v1/projects/{project}/changelog/{id}` with `title`, `body` and/or `published` to edit, publish or unpublish. Linked request IDs remain immutable.
 
 ## Public status links and webhooks
+
+For an operator-controlled triage receiver, configure `WEBHOOK_URL` and `WEBHOOK_SECRET`. This optional sender emits `request.created`, public `comment.created` and `request.status_changed` with request text, submitter identity, app/end-user attribution and distinct event actors. It uses a durable outbox, five attempts and raw-body HMAC signing. Read [configuration, payloads, verification and delivery guarantees](docs/webhooks.md) before enabling it: this destination receives private data from every project. The per-project webhooks below retain their existing, separate contract.
 
 Projects default to private status pages. Enabling `public_status_page` permits unguessable `/s/<token>` links for individual requests. The public response contains the title, status, public comment text and status history with timestamps. It excludes author data, actor names, request description, source, internal comments and project identifiers. Authors can still put personal information in a title or public comment, so review content before sharing a link. Turning the project setting off disables existing public links.
 

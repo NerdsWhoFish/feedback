@@ -88,6 +88,9 @@ func run() error {
 		return err
 	}
 	application := api.New(db, logger)
+	if err = application.ConfigureOutgoingWebhook(c.WebhookURL, c.WebhookSecret, c.BaseURL); err != nil {
+		return err
+	}
 	if err = application.ConfigureEmail(c.ResendAPIKey, c.EmailFrom, c.BaseURL, c.AdminEmails); err != nil {
 		return err
 	}
@@ -138,9 +141,10 @@ func run() error {
 		defer func() { _ = metricsServer.Close() }()
 	}
 	var workers sync.WaitGroup
-	workers.Add(3)
+	workers.Add(4)
 	go func() { defer workers.Done(); authentication.Cleanup(ctx) }()
 	go func() { defer workers.Done(); application.RunWebhooks(ctx) }()
+	go func() { defer workers.Done(); application.RunOutgoingWebhooks(ctx) }()
 	go func() { defer workers.Done(); application.RunEmail(ctx) }()
 	defer func() { stop(); workers.Wait() }()
 	done := make(chan error, 2)
