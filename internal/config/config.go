@@ -23,6 +23,7 @@ type Config struct {
 	FaroURL                                                     string
 	MetricsAddress, ResendAPIKey, EmailFrom                     string
 	WebhookURL, WebhookSecret                                   string
+	WebhookHeaders                                              map[string]string
 }
 
 func Load() (Config, error) {
@@ -35,6 +36,22 @@ func Load() (Config, error) {
 	c.EmailFrom = os.Getenv("EMAIL_FROM")
 	c.WebhookURL = os.Getenv("WEBHOOK_URL")
 	c.WebhookSecret = os.Getenv("WEBHOOK_SECRET")
+	headers, err := ParseWebhookHeaders(os.Getenv("WEBHOOK_HEADERS"))
+	if err != nil {
+		return c, err
+	}
+	if authorization := os.Getenv("WEBHOOK_AUTHORIZATION"); authorization != "" {
+		if _, exists := headers["Authorization"]; exists {
+			return c, errors.New("WEBHOOK_AUTHORIZATION conflicts with WEBHOOK_HEADERS")
+		}
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		if err := addWebhookHeader(headers, "Authorization", authorization); err != nil {
+			return c, errors.New("WEBHOOK_AUTHORIZATION has an invalid value or exceeds combined header limits")
+		}
+	}
+	c.WebhookHeaders = headers
 	if c.WebhookURL != "" {
 		if !ValidWebhookEndpoint(c.WebhookURL) {
 			return c, errors.New("WEBHOOK_URL must be HTTPS or HTTP on loopback or an in-cluster host, without credentials, query or fragment")

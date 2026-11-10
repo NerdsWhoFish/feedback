@@ -88,7 +88,7 @@ func run() error {
 		return err
 	}
 	application := api.New(db, logger)
-	if err = application.ConfigureOutgoingWebhook(c.WebhookURL, c.WebhookSecret, c.BaseURL); err != nil {
+	if err = application.ConfigureOutgoingWebhookWithHeaders(c.WebhookURL, c.WebhookSecret, c.BaseURL, c.WebhookHeaders); err != nil {
 		return err
 	}
 	if err = application.ConfigureEmail(c.ResendAPIKey, c.EmailFrom, c.BaseURL, c.AdminEmails); err != nil {

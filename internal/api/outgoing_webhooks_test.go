@@ -39,6 +39,23 @@ func TestOutgoingDisabledWithoutDatabase(t *testing.T) {
 	}
 }
 
+func TestOutgoingHeaderConfiguration(t *testing.T) {
+	s := &Server{}
+	if err := s.ConfigureOutgoingWebhookWithHeaders("", "", "", map[string]string{"Authorization": "Bearer <fake-key>"}); err != nil || s.outgoing != nil {
+		t.Fatal("receiver credentials enabled a disabled webhook")
+	}
+	if err := s.ConfigureOutgoingWebhookWithHeaders("https://receiver.example", "fake-signing-secret", "https://feedback.example", map[string]string{"HOST": "fake-routing-secret"}); err == nil {
+		t.Fatal("server did not validate receiver headers")
+	}
+	if err := s.ConfigureOutgoingWebhookWithHeaders("https://receiver.example", "fake-signing-secret", "https://feedback.example", map[string]string{"Authorization": "Bearer <fake-first-key>"}); err != nil {
+		t.Fatal(err)
+	}
+	target := s.outgoing.sender.Target()
+	if err := s.ConfigureOutgoingWebhookWithHeaders("https://receiver.example", "fake-signing-secret", "https://feedback.example", map[string]string{"X-Routine-Key": "<fake-rotated-key>"}); err != nil || s.outgoing.sender.Target() != target {
+		t.Fatal("server changed pending-delivery identity during header rotation")
+	}
+}
+
 func claimOutgoing(t *testing.T, f *fixture, q *outgoingQueue) (webhook.Delivery, webhook.Payload) {
 	t.Helper()
 	d, err := q.Claim(context.Background(), f.s.outgoing.sender.Target())

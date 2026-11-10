@@ -16,6 +16,42 @@ HTTPS is accepted with a valid host and port. HTTP is accepted only for loopback
 
 No redirects are followed, including same-host redirects. Ambient proxy settings are ignored. The operator-configured host is trusted and resolved normally on each connection; this is not a tenant-controlled destination or a DNS/IP allowlist. Use cluster network policies or an egress firewall to enforce the intended destination, especially for internal HTTP. TLS certificate verification remains enabled. No automatic endpoint discovery or insecure TLS option is provided.
 
+### Receiver authentication headers
+
+A receiver such as the Grok Bot routine can require standard `Authorization` independently of the webhook signature. Use `WEBHOOK_AUTHORIZATION` for that header and `WEBHOOK_HEADERS` for any additional headers:
+
+```dotenv
+WEBHOOK_AUTHORIZATION='<sender-key>'
+WEBHOOK_HEADERS='{"X-Routine-Key":"<custom-key>"}'
+```
+
+The shortcut value is sent verbatim: Feedback does not add `Bearer`, trim it, or otherwise rewrite it. If the receiver requires a Bearer credential, set `WEBHOOK_AUTHORIZATION='Bearer <sender-key>'` explicitly. Unset or empty adds no Authorization header. It uses the same value validation and combined header limits as the JSON option, and both are passed through the existing owned header map.
+
+The general JSON option still supports `Authorization` when the shortcut is empty:
+
+```dotenv
+WEBHOOK_AUTHORIZATION=
+WEBHOOK_HEADERS='{"Authorization":"Bearer <sender-key>","X-Routine-Key":"<custom-key>"}'
+```
+
+All example credentials are fake placeholders. Outer single quotes are shell quoting, not part of the environment value. A nonempty `WEBHOOK_AUTHORIZATION` conflicts with any case-insensitive `Authorization` key in `WEBHOOK_HEADERS`, even when its JSON string value is empty or matches the shortcut. Startup rejects the conflict with a sanitized error; there is no precedence rule.
+
+For `WEBHOOK_HEADERS`, unset, empty or `{}` means no extra headers. Configuration must be one JSON object with single string values, not lists. Malformed JSON, trailing content, `null`, non-string values and duplicate names are rejected, including exact duplicate JSON keys and case-insensitive duplicates. Both variables are validated at startup even when `WEBHOOK_URL` is unset.
+
+Names must follow the RFC 7230 token grammar and are canonicalized. Values from either option must be valid UTF-8 and valid HTTP field values: CR/LF, NUL, DEL and other ASCII controls except horizontal tab are rejected. Across both variables, the combined limits are 16 headers and 8 KiB of decoded name/value bytes. The JSON input has a separate 16 KiB limit. Header names are case-insensitive. These names and prefixes are reserved:
+
+| Purpose | Reserved names |
+| --- | --- |
+| Feedback protocol | Every `X-Feedback-*` header and `Content-Type`. |
+| Routing, framing and transport | `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Proxy-Connection`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`, `Expect`, `Content-Encoding`, `Accept-Encoding`, `Proxy-Authorization`, `Proxy-Authenticate`. |
+| Tracing and baggage | `Traceparent`, `Tracestate`, `Baggage`, `B3`, every `X-B3-*`, `Uber-Trace-Id`, every `Uberctx-*` and `Ot-Baggage-*`, `X-Amzn-Trace-Id`, `X-Cloud-Trace-Context`, `Grpc-Trace-Bin`. |
+
+These restrictions prevent credential values from changing routing or message framing, overriding the webhook protocol, or becoming trace metadata. Treat every configured value as a secret and supply real values through the server's secret-management workflow. Values are kept in memory and applied to each outgoing attempt; they are not included in errors, logs, spans, API responses, database rows or delivery fingerprints. Validation errors also omit input names and JSON decoder fragments. The sender owns a validated copy of its header configuration; request construction does not mutate the caller's map or share mutable request headers between attempts.
+
+`WEBHOOK_SECRET` signs the raw JSON body. Receiver authentication through `WEBHOOK_AUTHORIZATION` or `WEBHOOK_HEADERS` is independent: neither configured header names nor values are covered by `X-Feedback-Signature`. The existing signature and metadata headers remain unchanged. All redirects remain forbidden, including when receiver credentials are configured.
+
+Headers are loaded at startup, with no hot reload. Change `WEBHOOK_AUTHORIZATION` or `WEBHOOK_HEADERS` and restart the application to rotate receiver credentials. Neither participates in the URL/signing-key fingerprint: pending rows use the restarted worker's current headers while retaining their existing ID, timestamp, body and HMAC signature. Even a coordinated rolling restart can temporarily send old and new credentials from different replicas; keep both accepted by the receiver until all old workers have stopped. Authentication rejection such as `401` or `403` remains a permanent delivery failure, so a header rotation does not revive already completed failures. URL or `WEBHOOK_SECRET` changes still pause old pending rows as described below.
+
 ## Events and payload
 
 | Event | Trigger and extra fields |
@@ -127,7 +163,7 @@ Imports: `crypto/hmac`, `crypto/sha256`, `encoding/hex`, `encoding/json`, `error
 - There is no strict ordering, especially across retries and replicas. For current state, read the authenticated request API rather than inferring state from arrival order. A snapshot represents event creation time; later profile or request changes do not modify its bytes.
 - Shutdown cancels in-flight HTTP and database work and joins the worker before closing the database. It does not drain the backlog. Unfinished deliveries survive restart; a canceled attempt consumes a claim and becomes eligible when its lease expires.
 - Deliveries older than 24 hours are no longer attempted and become terminal `expired` when cleanup runs. Cleanup deletes snapshots older than seven days in batches of at most 100. Cleanup runs only while this env-configured worker is enabled. If it remains disabled, an operator must apply the retention policy to the stored table separately.
-- Each row is bound to the exact URL and secret through an HMAC fingerprint. Changing either setting pauses old pending rows; they are never sent to the new destination or signed with a replacement secret. Restoring the previous settings within 24 hours resumes them. Plan rotations by letting the queue finish first. Use identical settings across active replicas, and coordinate rotation because an old process can still deliver to its old configured destination. There is no replay/admin API for this queue.
+- Each row is bound to the exact URL and signing secret through an HMAC fingerprint. Changing either setting pauses old pending rows; they are never sent to the new destination or signed with a replacement signing secret. Restoring the previous settings within 24 hours resumes them. Plan URL/signing-key rotations by letting the queue finish first. Use identical settings across active replicas, and coordinate rotation because an old process can still deliver to its old configured destination. Receiver authentication headers are excluded from this fingerprint and follow the restart/rotation rules above. There is no replay/admin API for this queue.
 
 `outgoing_webhook_deliveries` stores attempts, next attempt time, lease, completion time, last status and bounded outcome, as well as the private snapshot. It is separate from the legacy per-project queue and is not exposed by the existing delivery-list UI/API. Inspect only necessary operational columns, for example:
 

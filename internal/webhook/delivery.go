@@ -47,11 +47,20 @@ type Queue interface {
 
 type Sender struct {
 	url, secret string
+	headers     map[string]string
 	client      *http.Client
 	timeout     time.Duration
 }
 
 func New(url, secret string) (*Sender, error) {
+	return NewWithHeaders(url, secret, nil)
+}
+
+func NewWithHeaders(url, secret string, headers map[string]string) (*Sender, error) {
+	owned, err := config.CopyWebhookHeaders(headers)
+	if err != nil {
+		return nil, err
+	}
 	if url == "" {
 		return nil, nil
 	}
@@ -67,14 +76,13 @@ func New(url, secret string) (*Sender, error) {
 		MaxIdleConns: 1, MaxIdleConnsPerHost: 1, MaxConnsPerHost: 1, IdleConnTimeout: 30 * time.Second,
 		MaxResponseHeaderBytes: 32 << 10,
 	}
-	return &Sender{url: url, secret: secret, timeout: 10 * time.Second, client: &http.Client{
+	return &Sender{url: url, secret: secret, headers: owned, timeout: 10 * time.Second, client: &http.Client{
 		Transport: transport, Timeout: 10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil
 }
 
-// Target binds persisted customer data to the configured destination and key.
-// Rotation pauses old deliveries instead of silently sending them elsewhere.
+// Target binds URL/signing key only, allowing receiver auth to rotate.
 func (s *Sender) Target() string { return signature(s.secret, []byte(s.url)) }
 
 func signature(secret string, body []byte) string {
@@ -91,6 +99,9 @@ func (s *Sender) Deliver(ctx context.Context, d Delivery) Result {
 	result := Result{Outcome: "transport_failed"}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(d.Body))
 	if err == nil {
+		for name, value := range s.headers {
+			req.Header.Set(name, value)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Feedback-Event", d.Event)
 		req.Header.Set("X-Feedback-Delivery", d.ID)

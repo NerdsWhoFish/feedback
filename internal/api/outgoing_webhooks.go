@@ -24,7 +24,11 @@ type outgoingConfig struct {
 }
 
 func (s *Server) ConfigureOutgoingWebhook(destination, secret, baseURL string) error {
-	sender, err := webhook.New(destination, secret)
+	return s.ConfigureOutgoingWebhookWithHeaders(destination, secret, baseURL, nil)
+}
+
+func (s *Server) ConfigureOutgoingWebhookWithHeaders(destination, secret, baseURL string, headers map[string]string) error {
+	sender, err := webhook.NewWithHeaders(destination, secret, headers)
 	if err != nil {
 		return err
 	}
