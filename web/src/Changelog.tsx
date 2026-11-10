@@ -1,0 +1,163 @@
+import { useState } from "react";
+import { api, useAction, useResource } from "./api";
+import { DateLabel, Empty, Field, Loading, Notice, Pagination } from "./ui";
+import type { ChangelogEntry, Page, Project, RequestItem } from "./types";
+
+export function Changelog({
+  project,
+  admin,
+}: {
+  project: Project;
+  admin: boolean;
+}) {
+  const [offset, setOffset] = useState(0);
+  const [adding, setAdding] = useState(false);
+  const resource = useResource<Page<ChangelogEntry>>(
+    `/api/v1/projects/${project.id}/changelog?limit=20&offset=${offset}`,
+  );
+  return (
+    <section>
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">OUT IN THE WORLD</p>
+          <h2>Good things, delivered.</h2>
+        </div>
+        {admin && (
+          <button className="primary" onClick={() => setAdding((v) => !v)}>
+            {adding ? "Close form" : "+ Add update"}
+          </button>
+        )}
+      </div>
+      {adding && (
+        <NewEntry
+          project={project}
+          onSaved={() => {
+            setAdding(false);
+            setOffset(0);
+            resource.reload();
+          }}
+        />
+      )}
+      <Notice error={resource.error} />
+      {resource.loading ? (
+        <Loading />
+      ) : resource.data?.items.length ? (
+        <div className="changelog-list">
+          {resource.data.items.map((entry) => (
+            <article className="changelog-entry" key={entry.id}>
+              <div>
+                <span className="eyebrow">SHIPPED</span>
+                <DateLabel value={entry.created_at} />
+              </div>
+              <section>
+                <h3>{entry.title}</h3>
+                <p className="prose">{entry.body}</p>
+                {entry.request_ids?.length > 0 && (
+                  <div className="linked-requests">
+                    {entry.request_ids.map((id, index) => (
+                      <a
+                        key={id}
+                        href={`#${new URLSearchParams({ project: project.id, view: "requests", request: id })}`}
+                      >
+                        Related request {index + 1} ↗
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </article>
+          ))}
+        </div>
+      ) : (
+        !resource.error && (
+          <Empty title="The next chapter is still being written">
+            When something ships, you will find the details here.
+          </Empty>
+        )
+      )}
+      <Pagination
+        offset={offset}
+        count={resource.data?.items.length ?? 0}
+        onChange={setOffset}
+      />
+    </section>
+  );
+}
+
+function NewEntry({
+  project,
+  onSaved,
+}: {
+  project: Project;
+  onSaved: () => void;
+}) {
+  const shipped = useResource<Page<RequestItem>>(
+    `/api/v1/projects/${project.id}/requests?status=shipped&limit=100`,
+  );
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [links, setLinks] = useState<string[]>([]);
+  const action = useAction();
+  return (
+    <form
+      className="panel form-panel"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void action.run(async () => {
+          await api(`/api/v1/projects/${project.id}/changelog`, "POST", {
+            title,
+            body,
+            request_ids: links,
+          });
+          onSaved();
+        });
+      }}
+    >
+      <h3>Write a release update</h3>
+      <Field label="Title">
+        <input
+          required
+          maxLength={200}
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+        />
+      </Field>
+      <Field label="What changed?">
+        <textarea
+          required
+          maxLength={10000}
+          rows={5}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+        />
+      </Field>
+      <fieldset>
+        <legend>Link shipped requests</legend>
+        <Notice error={shipped.error} />
+        {shipped.data?.items.map((request) => (
+          <label className="checkbox" key={request.id}>
+            <input
+              type="checkbox"
+              checked={links.includes(request.id)}
+              onChange={(event) =>
+                setLinks(
+                  event.target.checked
+                    ? [...links, request.id]
+                    : links.filter((id) => id !== request.id),
+                )
+              }
+            />
+            {request.title}
+          </label>
+        ))}
+        {!shipped.loading && !shipped.data?.items.length && (
+          <p className="hint">No shipped requests to link yet.</p>
+        )}
+      </fieldset>
+      <Notice error={action.error} />
+      <button className="primary" disabled={action.busy}>
+        {action.busy ? "Publishing..." : "Publish update"}
+      </button>
+    </form>
+  );
+}
