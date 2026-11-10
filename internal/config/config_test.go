@@ -25,6 +25,7 @@ func TestConfigFailsClosed(t *testing.T) {
 }
 
 func TestEndpointValidation(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	for _, value := range []string{"http://auth.example", "https://user:secret@auth.example", "https://auth.example?secret=x", "https://auth.example#fragment", "file:///etc/passwd"} {
 		if ValidEndpoint(value, false) {
 			t.Fatalf("accepted %s", value)
@@ -35,6 +36,11 @@ func TestEndpointValidation(t *testing.T) {
 	}
 	if !ValidEndpoint("http://127.0.0.1:8081", true) {
 		t.Fatal("local test provider rejected")
+	}
+	for _, value := range []string{"http://alloy", "http://alloy.monitoring.svc:4318", "http://localhost:4318", "http://127.0.0.1:4318", "http://[::1]:4318"} {
+		if ValidEndpoint(value, false) {
+			t.Fatalf("production auth/Faro accepted HTTP endpoint %s", value)
+		}
 	}
 }
 

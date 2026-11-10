@@ -20,14 +20,36 @@ import (
 )
 
 func TestExportProtobufAndSafeResources(t *testing.T) {
+	testExport(t, "local", true)
+}
+
+func TestExportHTTPWithoutHeaders(t *testing.T) {
+	for _, environment := range []string{"production", "staging", "test", "local"} {
+		t.Run(environment, func(t *testing.T) { testExport(t, environment, false) })
+	}
+}
+
+func TestExportHTTPSProduction(t *testing.T) {
+	testExport(t, "production", true)
+}
+
+func testExport(t *testing.T, environment string, tls bool) {
+	t.Helper()
 	var mu sync.Mutex
 	counts := map[string]int{}
-	collector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	authorization := ""
+	if tls {
+		authorization = "Basic test-fixture"
+	}
+	collectorHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.TLS != nil) != tls {
+			t.Error("unexpected transport security")
+		}
 		if r.Header.Get("Content-Type") != "application/x-protobuf" {
 			t.Error("non-protobuf telemetry")
 		}
-		if r.Header.Get("Authorization") != "Basic test-fixture" {
-			t.Error("missing explicit authorization header")
+		if r.Header.Get("Authorization") != authorization {
+			t.Error("unexpected authorization header")
 		}
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -40,6 +62,9 @@ func TestExportProtobufAndSafeResources(t *testing.T) {
 			if proto.Unmarshal(b, &req) != nil {
 				t.Error("invalid trace protobuf")
 			}
+			if len(req.ResourceSpans) == 0 || len(req.ResourceSpans[0].ScopeSpans) == 0 || len(req.ResourceSpans[0].ScopeSpans[0].Spans) == 0 {
+				t.Error("empty trace export")
+			}
 			for _, rs := range req.ResourceSpans {
 				for _, a := range rs.Resource.Attributes {
 					if a.Key != "service.name" && a.Key != "service.version" && a.Key != "deployment.environment.name" {
@@ -51,6 +76,9 @@ func TestExportProtobufAndSafeResources(t *testing.T) {
 			var req logpb.ExportLogsServiceRequest
 			if proto.Unmarshal(b, &req) != nil {
 				t.Error("invalid log protobuf")
+			}
+			if len(req.ResourceLogs) == 0 || len(req.ResourceLogs[0].ScopeLogs) == 0 || len(req.ResourceLogs[0].ScopeLogs[0].LogRecords) == 0 {
+				t.Error("empty log export")
 			}
 			for _, rl := range req.ResourceLogs {
 				for _, scope := range rl.ScopeLogs {
@@ -69,19 +97,34 @@ func TestExportProtobufAndSafeResources(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		w.WriteHeader(200)
-	}))
+	})
+	var collector *httptest.Server
+	if tls {
+		collector = httptest.NewTLSServer(collectorHandler)
+	} else {
+		collector = httptest.NewServer(collectorHandler)
+	}
 	defer collector.Close()
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL+"/otlp")
-	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Basic test-fixture")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+	if tls {
+		t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization="+authorization)
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "Authorization=ignored")
+	t.Setenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "Authorization=ignored")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:1/wrong")
 	t.Setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://127.0.0.1:1/wrong")
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
-	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_INSECURE", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_LOGS_INSECURE", "true")
+	insecure := "false"
+	if tls {
+		insecure = "true"
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", insecure)
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_INSECURE", insecure)
+	t.Setenv("OTEL_EXPORTER_OTLP_LOGS_INSECURE", insecure)
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
 	t.Setenv("OTEL_SERVICE_NAME", "")
-	logger, shutdown, err := setup(context.Background(), "local", "test", collector.Client())
+	logger, shutdown, err := setup(context.Background(), environment, "test", collector.Client())
 	if err != nil {
 		t.Fatal(err)
 	}

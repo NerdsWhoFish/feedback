@@ -78,18 +78,25 @@ func setup(ctx context.Context, environment, version string, client *http.Client
 	opts := []tracesdk.TracerProviderOption{tracesdk.WithResource(res)}
 	var lp *logsdk.LoggerProvider
 	if base != "" {
-		if !config.ValidEndpoint(base, environment == "local") {
+		if !config.ValidOTLPEndpoint(base) {
 			return nil, nil, errors.New("invalid OTLP endpoint")
 		}
 		headers, err := parseHeaders(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"))
 		if err != nil {
 			return nil, nil, err
 		}
-		tr, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(strings.TrimRight(base, "/")+"/v1/traces"), otlptracehttp.WithHeaders(headers), otlptracehttp.WithHTTPClient(client), otlptracehttp.WithEncoding(otlptracehttp.EncodingProtobuf))
+		traceOpts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(strings.TrimRight(base, "/") + "/v1/traces"), otlptracehttp.WithHeaders(headers), otlptracehttp.WithHTTPClient(client), otlptracehttp.WithEncoding(otlptracehttp.EncodingProtobuf)}
+		logOpts := []otlploghttp.Option{otlploghttp.WithEndpointURL(strings.TrimRight(base, "/") + "/v1/logs"), otlploghttp.WithHeaders(headers), otlploghttp.WithHTTPClient(client)}
+		endpoint, _ := url.Parse(base) // ValidOTLPEndpoint already checked the URL.
+		if endpoint.Scheme == "http" {
+			traceOpts = append(traceOpts, otlptracehttp.WithInsecure())
+			logOpts = append(logOpts, otlploghttp.WithInsecure())
+		}
+		tr, err := otlptracehttp.New(ctx, traceOpts...)
 		if err != nil {
 			return nil, nil, errors.New("trace exporter configuration failed")
 		}
-		le, err := otlploghttp.New(ctx, otlploghttp.WithEndpointURL(strings.TrimRight(base, "/")+"/v1/logs"), otlploghttp.WithHeaders(headers), otlploghttp.WithHTTPClient(client))
+		le, err := otlploghttp.New(ctx, logOpts...)
 		if err != nil {
 			_ = tr.Shutdown(ctx)
 			return nil, nil, errors.New("log exporter configuration failed")

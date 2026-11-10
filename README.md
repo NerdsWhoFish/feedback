@@ -73,12 +73,13 @@ Tests create isolated schemas in the supplied database. Never point the test con
 | `WEBHOOK_ENCRYPTION_KEY` | Base64-encoded 32-byte key protecting webhook signing secrets at rest. Required outside local mode and to create webhooks. Back it up with PostgreSQL. |
 | `RESEND_API_KEY` | Server-only Resend API key. Unset disables email enqueue and delivery cleanly. |
 | `EMAIL_FROM` | Required when Resend is enabled, for example `feedback@nerdswhofish.com`. Verify the sending domain in Resend first. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP/protobuf base endpoint. Production destination: `https://otlp-gateway-prod-us-east-3.grafana.net/otlp`. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Server-only ingestion headers, for example `Authorization=Basic <credential>`. Never expose to the frontend. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP/protobuf base endpoint. Use an in-cluster Alloy receiver such as `http://alloy.monitoring.svc:4318`, or `https://otlp-gateway-prod-us-east-3.grafana.net/otlp` for direct Grafana Cloud export. |
+| `OTEL_EXPORTER_OTLP_INSECURE` | Explicit opt-in for additional internal HTTP collector addresses. Set to `true` (case-insensitive); other values do not enable it. Public HTTP destinations remain rejected. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Optional server-only ingestion headers, for example `Authorization=Basic <credential>` for Grafana Cloud. Leave empty for an Alloy receiver without authentication. Never expose to the frontend. |
 | `FARO_COLLECTOR_URL` | Server-only Grafana Faro collector endpoint for the filtered browser telemetry relay. |
 | `TEST_DATABASE_URL` | Integration-test database only; unused by the application. |
 
-Configure OIDC issuer, client ID and client secret together. Production and staging require OIDC, administrator emails, webhook encryption, OTLP and Faro endpoints. Arbitrary `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_SERVICE_NAME` overrides are rejected to preserve the telemetry resource allowlist. Configure the approved Grafana destinations and verify ingestion before opening production access.
+Configure OIDC issuer, client ID and client secret together. Production and staging require OIDC, administrator emails, webhook encryption, OTLP and Faro endpoints. Arbitrary `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_SERVICE_NAME` overrides are rejected to preserve the telemetry resource allowlist. Configure direct Grafana Cloud export or an in-cluster Alloy receiver forwarding to Grafana Cloud, plus the Faro destination, and verify ingestion before opening production access.
 
 ## Register the Tinyauth client
 
@@ -207,6 +208,10 @@ Metrics include `feedback_http_requests_total{method,route,status}`, `feedback_h
 ## Operations and delivery
 
 `GET /healthz` checks process health; `GET /readyz` checks database readiness. Structured logs and distributed traces use bounded operation names and trace/span correlation. The frontend reuses the shared privacy-filtered Faro SDK and sends telemetry to a server relay. Do not send tokens, emails, names, request contents, raw URLs or query strings into telemetry.
+
+In every environment, including production and staging, OTLP accepts HTTPS endpoints and plain HTTP to loopback or cluster service names: a bare name such as `alloy`, or a hostname ending in `.svc` or `.svc.cluster.local`. Host comparisons ignore case and trailing dots. For example, set `OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy.monitoring.svc:4318` and leave `OTEL_EXPORTER_OTLP_HEADERS` empty when the receiver requires no authentication. Alloy can enrich telemetry with Kubernetes metadata and forward it to Grafana Cloud without giving the application a Grafana ingestion credential.
+
+Set `OTEL_EXPORTER_OTLP_INSECURE=true` to also allow RFC1918 addresses, link-local addresses, IPv6 unique-local addresses, `.cluster.local` names, and short `service.namespace` names such as `alloy.monitoring`. Short names whose namespace matches a public suffix, such as `alloy.dev`, remain rejected; use their `.svc` address instead. Public DNS names and public IP addresses still require HTTPS, even with the opt-in. Only the case-insensitive value `true` enables this option, not `1`, `yes`, or whitespace-padded values. OTLP URLs require a host and must not contain userinfo, query strings, or fragments. This exception applies only to OTLP; OIDC and Faro still require HTTPS outside local loopback development.
 
 The [deployment example](deploy/README.md) covers secret references, probes, security context, backup requirements and rollout checks. HTTPS ingress and Flux changes are separate work in the cluster repository.
 
